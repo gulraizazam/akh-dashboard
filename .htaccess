@@ -1,0 +1,17 @@
+# The Laravel application root must never be served over HTTP — only public/ is.
+#
+# On deployments where the app root sits inside another site's document root
+# (e.g. nexthealth.com.pk/public_html/dashboard, served as the subdomain
+# dashboard.nexthealth.com.pk from dashboard/public), the parent domain would
+# otherwise expose .env, the database file and all source. This denies that path.
+#
+# The subdomain itself is served from public/ and is unaffected: Apache only
+# reads .htaccess from the DocumentRoot downwards.
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>
