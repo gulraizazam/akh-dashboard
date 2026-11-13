@@ -1,29 +1,33 @@
 @php
     $cards = [
-        ['key' => 'total_collection',    'label' => 'Total Collection',    'icon' => 'ti-cash',             'bg' => 'bg-grad-indigo', 'money' => true],
-        ['key' => 'total_consumed',      'label' => 'Total Consumed',      'icon' => 'ti-wallet',           'bg' => 'bg-grad-teal',   'money' => true],
-        ['key' => 'total_consultations', 'label' => 'Consultations',       'icon' => 'ti-stethoscope',      'bg' => 'bg-grad-cyan',   'money' => false],
-        ['key' => 'total_treatments',    'label' => 'Treatments',          'icon' => 'ti-vaccine',          'bg' => 'bg-grad-amber',  'money' => false],
-        ['key' => 'total_leads',         'label' => 'Leads',               'icon' => 'ti-users',            'bg' => 'bg-grad-rose',   'money' => false],
-        ['key' => 'total_plans',         'label' => 'Plans',               'icon' => 'ti-clipboard-list',   'bg' => 'bg-grad-slate',  'money' => false],
+        ['key' => 'total_collection',    'label' => 'Collection',     'icon' => 'bx-wallet',         'tone' => 'primary', 'money' => true],
+        ['key' => 'total_consumed',      'label' => 'Consumed',       'icon' => 'bx-receipt',        'tone' => 'warning', 'money' => true],
+        ['key' => 'total_consultations', 'label' => 'Consultations',  'icon' => 'bx-user-voice',     'tone' => 'info',    'money' => false],
+        ['key' => 'total_treatments',    'label' => 'Treatments',     'icon' => 'bx-plus-medical',   'tone' => 'success', 'money' => false],
+        ['key' => 'total_leads',         'label' => 'Leads',          'icon' => 'bx-user-plus',      'tone' => 'danger',  'money' => false],
+        ['key' => 'total_plans',         'label' => 'Plans',          'icon' => 'bx-package',        'tone' => 'secondary','money' => false],
     ];
 @endphp
 
 @foreach ($cards as $c)
-<div class="col-xl-2 col-lg-4 col-md-4 col-sm-6">
-    <div class="card stat-tile">
-        <div class="card-body d-flex align-items-center gap-3">
-            <div class="stat-ico {{ $c['bg'] }}">
-                <i class="ti {{ $c['icon'] }}"></i>
-            </div>
-            <div>
-                <div class="stat-val" data-stat="{{ $c['key'] }}">
-                    @php $val = $totals[$c['key']] ?? 0; @endphp
-                    {{ $c['money'] ? 'PKR ' . number_format($val) : number_format($val) }}
+    @php $val = $totals[$c['key']] ?? 0; @endphp
+    <div class="col-xl-2 col-lg-4 col-md-4 col-6">
+        <div class="card h-100">
+            <div class="card-body p-4">
+                <div class="d-flex align-items-center mb-2">
+                    <div class="avatar avatar-sm flex-shrink-0">
+                        <span class="avatar-initial rounded bg-label-{{ $c['tone'] }}">
+                            <i class="bx {{ $c['icon'] }}"></i>
+                        </span>
+                    </div>
                 </div>
-                <div class="stat-lbl">{{ $c['label'] }}</div>
+                <p class="text-muted text-uppercase mb-1" style="font-size:.6875rem; letter-spacing:.4px;">{{ $c['label'] }}</p>
+                <h4 class="card-title mb-0 text-nowrap" data-stat="{{ $c['key'] }}" style="font-size:1.375rem;">
+                    {{ number_format($val) }}
+                </h4>
+                {{-- The unit sits under the figure so the number itself stays uncluttered. --}}
+                <small class="text-muted">{{ $c['money'] ? 'PKR' : "\u{00A0}" }}</small>
             </div>
         </div>
     </div>
-</div>
 @endforeach

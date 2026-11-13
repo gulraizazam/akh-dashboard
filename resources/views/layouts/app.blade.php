@@ -1,96 +1,124 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="light">
+<html
+    lang="en"
+    class="layout-menu-fixed layout-compact"
+    data-assets-path="{{ asset('assets') }}/"
+    data-template="vertical-menu-template-free">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>@yield('title', 'Dashboard') · {{ config('app.name') }}</title>
-
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.3.0/dist/tabler-icons.min.css">
-
-    <style>
-        :root {
-            --tblr-font-sans-serif: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-        }
-        body { font-feature-settings: "cv02","cv03","cv04","cv11"; }
-        .navbar-brand-image { height: 2rem; }
-
-        /* ---- Stat tiles ---- */
-        .stat-tile .stat-ico {
-            width: 42px; height: 42px; border-radius: 10px;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 20px; color: #fff; flex-shrink: 0;
-        }
-        .stat-tile .stat-val  { font-size: 1.5rem; font-weight: 700; line-height: 1.2; margin-bottom: .1rem; }
-        .stat-tile .stat-lbl  { font-size: .7rem; letter-spacing: .4px; text-transform: uppercase; color: var(--tblr-secondary); }
-        .bg-grad-indigo  { background: linear-gradient(135deg, #6366f1, #4338ca); }
-        .bg-grad-teal    { background: linear-gradient(135deg, #14b8a6, #0f766e); }
-        .bg-grad-cyan    { background: linear-gradient(135deg, #06b6d4, #0e7490); }
-        .bg-grad-amber   { background: linear-gradient(135deg, #f59e0b, #b45309); }
-        .bg-grad-rose    { background: linear-gradient(135deg, #f43f5e, #9f1239); }
-        .bg-grad-slate   { background: linear-gradient(135deg, #64748b, #334155); }
-
-        /* ---- Filter pill ---- */
-        .filter-card .form-label { font-size: .72rem; font-weight: 600; letter-spacing: .3px; text-transform: uppercase; color: var(--tblr-secondary); }
-        .filter-card .form-select, .filter-card .form-control { border-radius: 8px; }
-
-        /* ---- Login ---- */
-        .auth-shell {
-            min-height: 100vh;
-            background: radial-gradient(1200px 500px at 50% -100px, #6366f1 0%, #4338ca 55%, #1e1b4b 100%);
-            display: flex; align-items: center; justify-content: center; padding: 2rem;
-        }
-        .auth-card {
-            width: 100%; max-width: 420px; border: 0;
-            box-shadow: 0 25px 60px -15px rgba(0,0,0,.35);
-            border-radius: 16px;
-        }
-    </style>
-
-    @stack('styles')
+    @include('layouts.partials.head')
 </head>
 <body>
-<div class="page">
 
-    @auth
-    <header class="navbar navbar-expand-md d-print-none sticky-top" data-bs-theme="dark"
-            style="background: #11141c; border-bottom: 1px solid rgba(255,255,255,.05);">
-        <div class="container-xl">
-            <h1 class="navbar-brand navbar-brand-autodark d-none-navbar-horizontal pe-0 pe-md-3 mb-0">
-                <a href="{{ route('dashboard') }}" class="d-flex align-items-center text-white text-decoration-none">
-                    <span class="d-inline-flex align-items-center justify-content-center me-2"
-                          style="width:34px; height:34px; border-radius:9px;
-                                 background: linear-gradient(135deg,#6366f1,#4338ca);">
-                        <i class="ti ti-chart-pie-filled" style="font-size:18px;"></i>
+<div class="layout-wrapper layout-content-navbar">
+    <div class="layout-container">
+
+        {{-- ---------- Sidebar ---------- --}}
+        <aside id="layout-menu" class="layout-menu menu-vertical menu bg-menu-theme">
+            <div class="app-brand demo">
+                <a href="{{ route('dashboard') }}" class="app-brand-link">
+                    <span class="app-brand-logo demo">
+                        <span class="text-primary"><i class="bx bx-bar-chart-alt-2" style="font-size:1.75rem;"></i></span>
                     </span>
-                    <span class="fw-bold">{{ config('app.name') }}</span>
+                    <span class="app-brand-text demo menu-text fw-bold ms-2">{{ config('app.name') }}</span>
                 </a>
-            </h1>
-            <div class="navbar-nav flex-row order-md-last">
-                <div class="d-flex align-items-center gap-3">
-                    <span class="text-white-50 small d-none d-sm-inline">
-                        <i class="ti ti-user-circle me-1"></i>{{ auth()->user()->name }}
-                    </span>
-                    <form action="{{ route('logout') }}" method="POST" class="m-0">
-                        @csrf
-                        <button type="submit" class="btn btn-sm btn-outline-light">
-                            <i class="ti ti-logout me-1"></i> Logout
-                        </button>
-                    </form>
+                <a href="javascript:void(0);" class="layout-menu-toggle menu-link text-large ms-auto">
+                    <i class="bx bx-chevron-left bx-sm align-middle"></i>
+                </a>
+            </div>
+
+            <div class="menu-inner-shadow"></div>
+
+            <ul class="menu-inner py-1">
+                <li class="menu-item {{ request()->routeIs('dashboard') ? 'active' : '' }}">
+                    <a href="{{ route('dashboard') }}" class="menu-link">
+                        <i class="menu-icon tf-icons bx bx-home-smile"></i>
+                        <div>Analytics</div>
+                    </a>
+                </li>
+
+                <li class="menu-header small text-uppercase"><span class="menu-header-text">Brands</span></li>
+                @foreach (config('brands.items') as $key => $brand)
+                    <li class="menu-item {{ request('brand') === $key ? 'active' : '' }}">
+                        <a href="{{ route('dashboard', ['brand' => $key, 'period' => request('period', 'thismonth')]) }}" class="menu-link">
+                            <i class="menu-icon tf-icons bx bx-buildings"></i>
+                            <div>{{ $brand['label'] }}</div>
+                        </a>
+                    </li>
+                @endforeach
+            </ul>
+        </aside>
+
+        <div class="layout-page">
+
+            {{-- ---------- Navbar ---------- --}}
+            <nav class="layout-navbar container-xxl navbar-detached navbar navbar-expand-xl align-items-center bg-navbar-theme"
+                 id="layout-navbar">
+                <div class="layout-menu-toggle navbar-nav align-items-xl-center me-4 me-xl-0 d-xl-none">
+                    <a class="nav-item nav-link px-0 me-xl-6" href="javascript:void(0)">
+                        <i class="bx bx-menu bx-md"></i>
+                    </a>
                 </div>
+
+                <div class="navbar-nav-right d-flex align-items-center justify-content-end" id="navbar-collapse">
+                    <div class="navbar-nav align-items-center me-auto">
+                        <div class="nav-item d-flex align-items-center">
+                            <span class="fw-semibold">@yield('title', 'Dashboard')</span>
+                        </div>
+                    </div>
+
+                    <ul class="navbar-nav flex-row align-items-center ms-md-auto">
+                        <li class="nav-item navbar-dropdown dropdown-user dropdown">
+                            <a class="nav-link dropdown-toggle hide-arrow p-0" href="javascript:void(0);" data-bs-toggle="dropdown">
+                                <div class="avatar avatar-online">
+                                    <span class="avatar-initial rounded-circle bg-label-primary">
+                                        {{ strtoupper(substr(auth()->user()->name, 0, 1)) }}
+                                    </span>
+                                </div>
+                            </a>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li>
+                                    <div class="dropdown-item-text">
+                                        <span class="fw-semibold d-block">{{ auth()->user()->name }}</span>
+                                        <small class="text-muted">{{ auth()->user()->email }}</small>
+                                    </div>
+                                </li>
+                                <li><div class="dropdown-divider my-1"></div></li>
+                                <li>
+                                    <form action="{{ route('logout') }}" method="POST">
+                                        @csrf
+                                        <button type="submit" class="dropdown-item">
+                                            <i class="bx bx-power-off bx-md me-3"></i><span>Log Out</span>
+                                        </button>
+                                    </form>
+                                </li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </nav>
+
+            {{-- ---------- Content ---------- --}}
+            <div class="content-wrapper">
+                <div class="container-xxl flex-grow-1 container-p-y">
+                    @yield('content')
+                </div>
+
+                <footer class="content-footer footer bg-footer-theme">
+                    <div class="container-xxl d-flex flex-wrap justify-content-between py-4 flex-md-row flex-column">
+                        <div class="mb-2 mb-md-0">
+                            &copy; {{ date('Y') }} {{ config('app.name') }}
+                        </div>
+                    </div>
+                </footer>
+
+                <div class="content-backdrop fade"></div>
             </div>
         </div>
-    </header>
-    @endauth
-
-    <div class="page-wrapper">
-        @yield('content')
     </div>
+
+    <div class="layout-overlay layout-menu-toggle"></div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/js/tabler.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-@stack('scripts')
+@include('layouts.partials.scripts')
 </body>
 </html>

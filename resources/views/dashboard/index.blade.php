@@ -1,253 +1,415 @@
 @extends('layouts.app')
 @section('title', 'Analytics')
 
+@push('styles')
+<style>
+    /* Palette roles. Series hexes are the validated categorical slots 1 & 2,
+       checked against the Sneat card surface (#fff). Chrome/ink use Sneat's
+       own tokens so text never wears a series color. */
+    :root {
+        --viz-collection: #2a78d6;
+        --viz-consumed:   #eb6834;
+        --viz-grid:       #e7e7f1;
+        --viz-axis:       #a1acb8;
+    }
+    .viz-empty {
+        display: flex; align-items: center; justify-content: center;
+        height: 100%; min-height: 180px; color: #a1acb8; font-size: .875rem;
+    }
+    .filter-bar .form-label {
+        font-size: .6875rem; font-weight: 600; letter-spacing: .4px;
+        text-transform: uppercase; color: #a1acb8; margin-bottom: .25rem;
+    }
+    .period-badge { font-variant-numeric: tabular-nums; }
+</style>
+@endpush
+
 @section('content')
-<div class="page-header d-print-none">
-    <div class="container-xl">
-        <div class="row g-2 align-items-center">
-            <div class="col">
-                <div class="page-pretitle">Overview</div>
-                <h2 class="page-title">Analytics Dashboard</h2>
+
+{{-- ---------- Header ---------- --}}
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-2">
+    <div>
+        <h4 class="mb-1">Analytics</h4>
+        <p class="mb-0 text-muted">
+            @if ($filters['brand'])
+                {{ config("brands.items.{$filters['brand']}.label") }}
+            @else
+                All {{ count($brands) }} brands
+            @endif
+        </p>
+    </div>
+    <span class="badge bg-label-primary period-badge px-3 py-2">
+        <i class="bx bx-calendar me-1"></i>{{ $filters['from'] }} &rarr; {{ $filters['to'] }}
+    </span>
+</div>
+
+{{-- ---------- Filters ---------- --}}
+<div class="card mb-4 filter-bar">
+    <div class="card-body py-4">
+        <form id="filterForm" class="row g-3 align-items-end">
+            <div class="col-xl-3 col-md-6">
+                <label class="form-label" for="filterBrand">Brand</label>
+                <select name="brand" id="filterBrand" class="form-select">
+                    <option value="">All Brands</option>
+                    @foreach ($brands as $key => $brand)
+                        <option value="{{ $key }}" @selected($filters['brand'] === $key)>{{ $brand['label'] }}</option>
+                    @endforeach
+                </select>
             </div>
-            <div class="col-auto">
-                <span class="badge bg-indigo-lt">
-                    <i class="ti ti-calendar me-1"></i>
-                    {{ $filters['from'] }} &rarr; {{ $filters['to'] }}
-                </span>
+
+            <div class="col-xl-3 col-md-6">
+                <label class="form-label" for="filterLocation">Branch</label>
+                <select name="location" id="filterLocation" class="form-select" {{ $filters['brand'] ? '' : 'disabled' }}>
+                    <option value="">All Branches</option>
+                </select>
+            </div>
+
+            <div class="col-xl-2 col-md-4">
+                <label class="form-label" for="filterPeriod">Period</label>
+                <select name="period" id="filterPeriod" class="form-select">
+                    @php
+                        $periods = [
+                            'today' => 'Today', 'yesterday' => 'Yesterday', 'last7days' => 'Last 7 Days',
+                            'week' => 'This Week', 'thismonth' => 'This Month', 'lastmonth' => 'Last Month',
+                            'custom' => 'Custom',
+                        ];
+                    @endphp
+                    @foreach ($periods as $k => $label)
+                        <option value="{{ $k }}" @selected($filters['period'] === $k)>{{ $label }}</option>
+                    @endforeach
+                </select>
+            </div>
+
+            <div class="col-xl-2 col-md-4 custom-date-field" style="display:none;">
+                <label class="form-label" for="filterFrom">From</label>
+                <input type="date" name="from" id="filterFrom" class="form-control" value="{{ $filters['from'] }}">
+            </div>
+            <div class="col-xl-2 col-md-4 custom-date-field" style="display:none;">
+                <label class="form-label" for="filterTo">To</label>
+                <input type="date" name="to" id="filterTo" class="form-control" value="{{ $filters['to'] }}">
+            </div>
+
+            <div class="col-xl-2 col-md-4">
+                <button type="submit" class="btn btn-primary w-100" id="applyBtn">
+                    <i class="bx bx-filter-alt me-1"></i> Apply
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{{-- ---------- Unreachable ---------- --}}
+<div id="unreachableAlert"
+     class="alert alert-warning d-flex align-items-center {{ empty($data['unreachable']) ? 'd-none' : '' }}"
+     role="alert">
+    <i class="bx bx-error-circle me-2"></i>
+    <span>Not included &mdash; database unreachable or not configured:
+        <strong id="unreachableList">{{ implode(', ', $data['unreachable'] ?? []) }}</strong>
+    </span>
+</div>
+
+{{-- ---------- KPI row ---------- --}}
+<div class="row g-4 mb-4" id="statCards">
+    @include('dashboard.partials.stats', ['totals' => $data['totals']])
+</div>
+
+{{-- ---------- Trend ---------- --}}
+<div class="row g-4 mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center pb-0">
+                <div>
+                    <h5 class="card-title mb-0">Daily Collection</h5>
+                    <small class="text-muted">Cash received per day over the selected period</small>
+                </div>
+            </div>
+            <div class="card-body pt-3">
+                <div id="chartTrend"></div>
             </div>
         </div>
     </div>
 </div>
 
-<div class="page-body">
-    <div class="container-xl">
-
-        {{-- ---------- Filters ---------- --}}
-        <div class="card filter-card mb-3">
-            <div class="card-body">
-                <form id="filterForm" class="row g-3 align-items-end">
-
-                    <div class="col-md-3 col-sm-6">
-                        <label class="form-label">Brand</label>
-                        <select name="brand" id="filterBrand" class="form-select">
-                            <option value="">All Brands</option>
-                            @foreach ($brands as $key => $brand)
-                                <option value="{{ $key }}" @selected($filters['brand'] === $key)>{{ $brand['label'] }}</option>
-                            @endforeach
-                        </select>
-                    </div>
-
-                    <div class="col-md-3 col-sm-6">
-                        <label class="form-label">Location</label>
-                        <select name="location" id="filterLocation" class="form-select" {{ $filters['brand'] ? '' : 'disabled' }}>
-                            <option value="">All Locations</option>
-                        </select>
-                    </div>
-
-                    <div class="col-md-2 col-sm-6">
-                        <label class="form-label">Period</label>
-                        <select name="period" id="filterPeriod" class="form-select">
-                            @php
-                                $periods = [
-                                    'today'     => 'Today',
-                                    'yesterday' => 'Yesterday',
-                                    'last7days' => 'Last 7 Days',
-                                    'week'      => 'This Week',
-                                    'thismonth' => 'This Month',
-                                    'lastmonth' => 'Last Month',
-                                    'custom'    => 'Custom',
-                                ];
-                            @endphp
-                            @foreach ($periods as $k => $label)
-                                <option value="{{ $k }}" @selected($filters['period'] === $k)>{{ $label }}</option>
-                            @endforeach
-                        </select>
-                    </div>
-
-                    <div class="col-md-2 col-sm-6 custom-date-field" style="display:none;">
-                        <label class="form-label">From</label>
-                        <input type="date" name="from" id="filterFrom" class="form-control" value="{{ $filters['from'] }}">
-                    </div>
-                    <div class="col-md-2 col-sm-6 custom-date-field" style="display:none;">
-                        <label class="form-label">To</label>
-                        <input type="date" name="to" id="filterTo" class="form-control" value="{{ $filters['to'] }}">
-                    </div>
-
-                    <div class="col-md-2 col-sm-6 ms-auto">
-                        <button type="submit" class="btn btn-primary w-100" id="applyBtn">
-                            <i class="ti ti-filter me-1"></i> Apply
-                        </button>
-                    </div>
-                </form>
+{{-- ---------- Comparison + branches ---------- --}}
+<div class="row g-4 mb-4">
+    <div class="col-xl-6">
+        <div class="card h-100">
+            <div class="card-header pb-0">
+                <h5 class="card-title mb-0">Collection vs Consumed</h5>
+                <small class="text-muted">Per brand</small>
             </div>
+            <div class="card-body pt-3"><div id="chartBrandCompare"></div></div>
         </div>
-
-        {{-- ---------- Unreachable brands ---------- --}}
-        <div id="unreachableAlert" class="alert alert-warning d-flex align-items-center {{ empty($data['unreachable']) ? 'd-none' : '' }}">
-            <i class="ti ti-database-exclamation me-2"></i>
-            <span>Not counted (database unreachable or not configured): <strong id="unreachableList">{{ implode(', ', $data['unreachable'] ?? []) }}</strong></span>
+    </div>
+    <div class="col-xl-6">
+        <div class="card h-100">
+            <div class="card-header pb-0">
+                <h5 class="card-title mb-0">Collection by Branch</h5>
+                <small class="text-muted">Cash received per centre</small>
+            </div>
+            <div class="card-body pt-3"><div id="chartCollectionBranch"></div></div>
         </div>
-
-        {{-- ---------- Stat tiles ---------- --}}
-        <div class="row row-cards g-3 mb-3" id="statCards">
-            @include('dashboard.partials.stats', ['totals' => $data['totals']])
-        </div>
-
-        {{-- ---------- Charts ---------- --}}
-        <div class="row row-cards g-3">
-            <div class="col-lg-6">
-                <div class="card h-100">
-                    <div class="card-header">
-                        <h3 class="card-title"><i class="ti ti-building-bank me-1 text-indigo"></i> Collection by Branch</h3>
-                    </div>
-                    <div class="card-body"><canvas id="chartCollectionBranch" height="140"></canvas></div>
-                </div>
-            </div>
-            <div class="col-lg-6">
-                <div class="card h-100">
-                    <div class="card-header">
-                        <h3 class="card-title"><i class="ti ti-building-skyscraper me-1 text-teal"></i> Consumed by Branch</h3>
-                    </div>
-                    <div class="card-body"><canvas id="chartConsumedBranch" height="140"></canvas></div>
-                </div>
-            </div>
-
-            <div class="col-lg-6">
-                <div class="card h-100">
-                    <div class="card-header">
-                        <h3 class="card-title"><i class="ti ti-chart-donut-2 me-1 text-cyan"></i> Collection by Service Category</h3>
-                    </div>
-                    <div class="card-body"><canvas id="chartCollectionCategory" height="140"></canvas></div>
-                </div>
-            </div>
-            <div class="col-lg-6">
-                <div class="card h-100">
-                    <div class="card-header">
-                        <h3 class="card-title"><i class="ti ti-chart-pie-4 me-1 text-amber"></i> Consumed by Service Category</h3>
-                    </div>
-                    <div class="card-body"><canvas id="chartConsumedCategory" height="140"></canvas></div>
-                </div>
-            </div>
-
-            <div class="col-lg-6">
-                <div class="card h-100">
-                    <div class="card-header">
-                        <h3 class="card-title"><i class="ti ti-report-analytics me-1 text-rose"></i> Top Services by Consumed</h3>
-                    </div>
-                    <div class="card-body"><canvas id="chartConsumedService" height="140"></canvas></div>
-                </div>
-            </div>
-            <div class="col-lg-6">
-                <div class="card h-100">
-                    <div class="card-header">
-                        <h3 class="card-title"><i class="ti ti-arrows-exchange me-1 text-slate"></i> Collection vs Consumed per Brand</h3>
-                    </div>
-                    <div class="card-body"><canvas id="chartBrandBreakdown" height="140"></canvas></div>
-                </div>
-            </div>
-        </div>
-
     </div>
 </div>
+
+{{-- ---------- Categories ---------- --}}
+<div class="row g-4 mb-4">
+    <div class="col-xl-6">
+        <div class="card h-100">
+            <div class="card-header pb-0">
+                <h5 class="card-title mb-0">Collection by Service Category</h5>
+                <small class="text-muted">Top categories</small>
+            </div>
+            <div class="card-body pt-3"><div id="chartCollectionCategory"></div></div>
+        </div>
+    </div>
+    <div class="col-xl-6">
+        <div class="card h-100">
+            <div class="card-header pb-0">
+                <h5 class="card-title mb-0">Consumed by Service Category</h5>
+                <small class="text-muted">Top categories</small>
+            </div>
+            <div class="card-body pt-3"><div id="chartConsumedCategory"></div></div>
+        </div>
+    </div>
+</div>
+
+{{-- ---------- Services ---------- --}}
+<div class="row g-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header pb-0">
+                <h5 class="card-title mb-0">Top Services by Consumed</h5>
+                <small class="text-muted">Invoiced value per service</small>
+            </div>
+            <div class="card-body pt-3"><div id="chartConsumedService"></div></div>
+        </div>
+    </div>
+</div>
+
 @endsection
 
 @push('scripts')
 <script>
 (function () {
+    'use strict';
+
     const routes = {
         stats:     @json(route('dashboard.stats')),
         locations: @json(route('dashboard.locations')),
     };
     let payload = @json($data);
-    const palette = ['#6366f1','#14b8a6','#06b6d4','#f59e0b','#f43f5e','#64748b','#8b5cf6','#f97316','#10b981','#ec4899','#0ea5e9','#22c55e'];
 
-    const charts = {};
-    // Prefix the brand only when the view spans more than one, so a
-    // single-brand view reads "Alkhaleej DHA Karachi" not
-    // "Alkhaleej Hair Transplant · Alkhaleej DHA Karachi".
-    function sumByKey(rows, keyField, valueField) {
-        const map = {};
+    const C = {
+        collection: '#2a78d6',
+        consumed:   '#eb6834',
+        grid:       '#e7e7f1',
+        axis:       '#a1acb8',
+    };
+    const FONT = '"Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif';
+
+    const fmtFull  = v => 'PKR ' + Math.round(Number(v) || 0).toLocaleString();
+    const fmtShort = v => {
+        const n = Math.abs(Number(v) || 0);
+        const s = Number(v) < 0 ? '-' : '';
+        if (n >= 1e7) return s + (n / 1e7).toFixed(1).replace(/\.0$/, '') + 'Cr';
+        if (n >= 1e5) return s + (n / 1e5).toFixed(1).replace(/\.0$/, '') + 'L';
+        if (n >= 1e3) return s + Math.round(n / 1e3) + 'k';
+        return s + Math.round(n);
+    };
+
+    // ---- data shaping -----------------------------------------------------
+
+    // Merge rows into {label: total}. The brand is prefixed only when the view
+    // spans several, so a single-brand view doesn't repeat what the filter says.
+    function merge(rows, keyField) {
         rows = rows || [];
-        const multiBrand = new Set(rows.map(r => r.brand)).size > 1;
+        const multi = new Set(rows.map(r => r.brand)).size > 1;
+        const map = {};
         rows.forEach(r => {
-            const label = (multiBrand && r.brand ? r.brand + ' · ' : '') + (r[keyField] || 'Unknown');
-            map[label] = (map[label] || 0) + Number(r[valueField] || 0);
+            const label = (multi && r.brand ? r.brand + ' · ' : '') + (r[keyField] || 'Unknown');
+            map[label] = (map[label] || 0) + Number(r.amount || 0);
         });
         return map;
     }
-    function buildChart(id, type, dataMap) {
-        const ctx = document.getElementById(id);
-        if (!ctx) return;
-        const labels = Object.keys(dataMap);
-        const values = Object.values(dataMap);
-        const colors = labels.map((_, i) => palette[i % palette.length]);
-        const cfg = {
-            type,
-            data: {
-                labels,
-                datasets: [{
-                    label: 'Amount',
-                    data: values,
-                    backgroundColor: colors,
-                    borderColor: type === 'bar' ? colors : '#fff',
-                    borderWidth: type === 'bar' ? 0 : 2,
-                    borderRadius: type === 'bar' ? 6 : 0,
-                }],
-            },
-            options: {
-                plugins: {
-                    legend: {
-                        display: type !== 'bar',
-                        position: 'bottom',
-                        labels: { boxWidth: 12, padding: 10, font: { size: 11 } }
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: ctx => ctx.label + ': PKR ' + Number(ctx.parsed.y ?? ctx.parsed ?? 0).toLocaleString()
-                        }
-                    },
-                },
-                scales: type === 'bar'
-                    ? { y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } } }
-                    : {},
-                responsive: true,
-                maintainAspectRatio: false,
-            },
-        };
-        if (charts[id]) charts[id].destroy();
-        charts[id] = new Chart(ctx, cfg);
-    }
-    function renderCharts(d) {
-        buildChart('chartCollectionBranch',   'bar',      sumByKey(d.collection_by_branch,   'branch',   'amount'));
-        buildChart('chartConsumedBranch',     'bar',      sumByKey(d.consumed_by_branch,     'branch',   'amount'));
-        buildChart('chartCollectionCategory', 'doughnut', sumByKey(d.collection_by_category, 'category', 'amount'));
-        buildChart('chartConsumedCategory',   'doughnut', sumByKey(d.consumed_by_category,   'category', 'amount'));
-        buildChart('chartConsumedService',    'bar',      sumByKey(d.consumed_by_service,    'service',  'amount'));
 
-        const bb = d.brand_breakdown || [];
-        const ctx = document.getElementById('chartBrandBreakdown');
-        if (ctx) {
-            if (charts.brandBreakdown) charts.brandBreakdown.destroy();
-            charts.brandBreakdown = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: bb.map(r => r.brand),
-                    datasets: [
-                        { label: 'Collection', data: bb.map(r => Number(r.collection || 0)), backgroundColor: palette[0], borderRadius: 6 },
-                        { label: 'Consumed',   data: bb.map(r => Number(r.consumed   || 0)), backgroundColor: palette[1], borderRadius: 6 },
-                    ],
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 10 } } },
-                    scales: { y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } } },
-                },
-            });
+    // Sort desc, keep the top n, fold the tail into "Other" rather than
+    // rendering 60 unreadable bars.
+    function topN(map, n) {
+        const sorted = Object.entries(map).sort((a, b) => b[1] - a[1]);
+        const head = sorted.slice(0, n);
+        const tail = sorted.slice(n);
+        if (tail.length) {
+            head.push(['Other (' + tail.length + ')', tail.reduce((s, e) => s + e[1], 0)]);
         }
+        return { labels: head.map(e => e[0]), values: head.map(e => e[1]) };
     }
-    renderCharts(payload);
 
-    // ----- Filter form -----
+    // ---- chart factories --------------------------------------------------
+
+    const charts = {};
+
+    function mount(id, options, hasData) {
+        const el = document.querySelector('#' + id);
+        if (!el) return;
+        if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+        el.innerHTML = '';
+        if (!hasData) {
+            el.innerHTML = '<div class="viz-empty">No data for this selection</div>';
+            return;
+        }
+        charts[id] = new ApexCharts(el, options);
+        charts[id].render();
+    }
+
+    const baseGrid = {
+        borderColor: C.grid,
+        strokeDashArray: 0,
+        padding: { top: -8, right: 8, bottom: 0, left: 8 },
+    };
+    const baseLabelStyle = { colors: C.axis, fontSize: '12px', fontFamily: FONT };
+
+    // Horizontal bar: the default for long category/branch names.
+    function hBar(id, map, color, cap) {
+        const { labels, values } = topN(map, cap || 10);
+        const rows = labels.length;
+
+        mount(id, {
+            chart: {
+                type: 'bar',
+                height: Math.max(200, rows * 38 + 60),
+                toolbar: { show: false },
+                fontFamily: FONT,
+                parentHeightOffset: 0,
+            },
+            series: [{ name: 'Amount', data: values }],
+            colors: [color],
+            plotOptions: {
+                bar: {
+                    horizontal: true,
+                    borderRadius: 4,
+                    borderRadiusApplication: 'end',
+                    barHeight: '62%',
+                    distributed: false,
+                    dataLabels: { position: 'top' },
+                },
+            },
+            dataLabels: {
+                enabled: true,
+                offsetX: 34,
+                style: { fontSize: '12px', fontWeight: 500, colors: [C.axis], fontFamily: FONT },
+                formatter: fmtShort,
+            },
+            grid: { ...baseGrid, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
+            xaxis: {
+                labels: { style: baseLabelStyle, formatter: fmtShort },
+                axisBorder: { show: false },
+                axisTicks: { show: false },
+            },
+            yaxis: {
+                labels: { style: baseLabelStyle, maxWidth: 240 },
+            },
+            tooltip: {
+                style: { fontFamily: FONT },
+                y: { formatter: fmtFull, title: { formatter: () => '' } },
+            },
+            legend: { show: false },
+            states: { hover: { filter: { type: 'darken', value: 0.9 } } },
+        }, rows > 0);
+    }
+
+    function renderTrend(points) {
+        const data = (points || []).map(p => ({ x: p.date, y: Number(p.amount || 0) }));
+        const any  = data.some(p => p.y !== 0);
+
+        mount('chartTrend', {
+            chart: {
+                type: 'area',
+                height: 300,
+                toolbar: { show: false },
+                fontFamily: FONT,
+                zoom: { enabled: false },
+                parentHeightOffset: 0,
+            },
+            series: [{ name: 'Collection', data }],
+            colors: [C.collection],
+            stroke: { curve: 'smooth', width: 2 },
+            fill: {
+                type: 'gradient',
+                gradient: { shadeIntensity: 1, opacityFrom: 0.28, opacityTo: 0.02, stops: [0, 95] },
+            },
+            dataLabels: { enabled: false },
+            markers: { size: 0, hover: { size: 5 } },
+            grid: { ...baseGrid, xaxis: { lines: { show: false } }, yaxis: { lines: { show: true } } },
+            xaxis: {
+                type: 'datetime',
+                labels: { style: baseLabelStyle, format: 'dd MMM' },
+                axisBorder: { show: false },
+                axisTicks: { show: false },
+                tooltip: { enabled: false },
+            },
+            yaxis: { labels: { style: baseLabelStyle, formatter: fmtShort } },
+            tooltip: {
+                style: { fontFamily: FONT },
+                x: { format: 'ddd, dd MMM yyyy' },
+                y: { formatter: fmtFull },
+            },
+            legend: { show: false },
+        }, data.length > 0 && any);
+    }
+
+    function renderBrandCompare(rows) {
+        rows = rows || [];
+        const labels = rows.map(r => r.brand);
+
+        mount('chartBrandCompare', {
+            chart: {
+                type: 'bar',
+                height: Math.max(240, rows.length * 56 + 70),
+                toolbar: { show: false },
+                fontFamily: FONT,
+                parentHeightOffset: 0,
+            },
+            series: [
+                { name: 'Collection', data: rows.map(r => Number(r.collection || 0)) },
+                { name: 'Consumed',   data: rows.map(r => Number(r.consumed   || 0)) },
+            ],
+            colors: [C.collection, C.consumed],
+            plotOptions: {
+                bar: { horizontal: true, borderRadius: 4, borderRadiusApplication: 'end', barHeight: '74%' },
+            },
+            dataLabels: { enabled: false },
+            stroke: { show: true, width: 2, colors: ['#fff'] },
+            grid: { ...baseGrid, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
+            xaxis: {
+                categories: labels,
+                labels: { style: baseLabelStyle, formatter: fmtShort },
+                axisBorder: { show: false },
+                axisTicks: { show: false },
+            },
+            yaxis: { labels: { style: baseLabelStyle, maxWidth: 200 } },
+            tooltip: { style: { fontFamily: FONT }, y: { formatter: fmtFull } },
+            legend: {
+                position: 'top', horizontalAlign: 'left', offsetY: 4,
+                markers: { size: 6 }, fontFamily: FONT, labels: { colors: C.axis },
+                itemMargin: { horizontal: 10 },
+            },
+        }, rows.length > 0);
+    }
+
+    function renderAll(d) {
+        renderTrend(d.trend);
+        renderBrandCompare(d.brand_breakdown);
+        hBar('chartCollectionBranch',   merge(d.collection_by_branch,   'branch'),   C.collection, 12);
+        hBar('chartCollectionCategory', merge(d.collection_by_category, 'category'), C.collection, 8);
+        hBar('chartConsumedCategory',   merge(d.consumed_by_category,   'category'), C.consumed,   8);
+        hBar('chartConsumedService',    merge(d.consumed_by_service,    'service'),  C.consumed,   12);
+    }
+
+    renderAll(payload);
+
+    // ---- filters ----------------------------------------------------------
+
     const form      = document.getElementById('filterForm');
     const brandSel  = document.getElementById('filterBrand');
     const locSel    = document.getElementById('filterLocation');
@@ -262,14 +424,13 @@
     togglePeriod();
     periodSel.addEventListener('change', togglePeriod);
 
-    async function loadLocations() {
-        locSel.innerHTML = '<option value="">All Locations</option>';
+    async function loadLocations(preselect) {
+        locSel.innerHTML = '<option value="">All Branches</option>';
         if (!brandSel.value) { locSel.disabled = true; return; }
         locSel.disabled = false;
         try {
-            const res = await fetch(routes.locations + '?brand=' + encodeURIComponent(brandSel.value), {
-                headers: { 'Accept': 'application/json' },
-            });
+            const res  = await fetch(routes.locations + '?brand=' + encodeURIComponent(brandSel.value),
+                                     { headers: { Accept: 'application/json' } });
             const json = await res.json();
             (json.data || []).forEach(loc => {
                 const opt = document.createElement('option');
@@ -277,47 +438,47 @@
                 opt.textContent = loc.name;
                 locSel.appendChild(opt);
             });
-        } catch (e) { /* ignore */ }
+            if (preselect) locSel.value = preselect;
+        } catch (e) { /* leave "All Branches" */ }
     }
-    brandSel.addEventListener('change', loadLocations);
-    if (brandSel.value) { loadLocations().then(() => { locSel.value = @json($filters['location']); }); }
+
+    brandSel.addEventListener('change', function () {
+        locSel.value = '';
+        loadLocations(null);
+    });
+    if (brandSel.value) loadLocations(@json($filters['location']));
 
     form.addEventListener('submit', async function (e) {
         e.preventDefault();
         applyBtn.disabled = true;
-        applyBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Loading…';
+        const original = applyBtn.innerHTML;
+        applyBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span> Loading';
+
         try {
             const params = new URLSearchParams(new FormData(form));
-            const res = await fetch(routes.stats + '?' + params.toString(), {
-                headers: { 'Accept': 'application/json' },
-            });
+            const res  = await fetch(routes.stats + '?' + params.toString(),
+                                     { headers: { Accept: 'application/json' } });
             const json = await res.json();
             payload = json.data;
 
             const t = payload.totals || {};
             document.querySelectorAll('[data-stat]').forEach(el => {
-                const key = el.dataset.stat;
-                el.textContent = formatValue(key, t[key]);
+                const v = t[el.dataset.stat];
+                el.textContent = (v === undefined || v === null)
+                    ? '—'
+                    : Math.round(Number(v)).toLocaleString();
             });
 
             const un = payload.unreachable || [];
-            const alertEl = document.getElementById('unreachableAlert');
             document.getElementById('unreachableList').textContent = un.join(', ');
-            alertEl.classList.toggle('d-none', un.length === 0);
+            document.getElementById('unreachableAlert').classList.toggle('d-none', un.length === 0);
 
-            renderCharts(payload);
+            renderAll(payload);
         } finally {
             applyBtn.disabled = false;
-            applyBtn.innerHTML = '<i class="ti ti-filter me-1"></i> Apply';
+            applyBtn.innerHTML = original;
         }
     });
-
-    function formatValue(key, val) {
-        if (val === undefined || val === null) return 'N/A';
-        const money = ['total_collection', 'total_consumed'];
-        if (money.includes(key)) return 'PKR ' + Number(val).toLocaleString();
-        return Number(val).toLocaleString();
-    }
 })();
 </script>
 @endpush

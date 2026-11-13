@@ -129,6 +129,7 @@ class BrandStatsService
         $consumedByCategory   = [];
         $consumedByService    = [];
         $unreachable          = [];
+        $trend                = [];
 
         foreach ($keys as $key) {
             $label = $this->label($key);
@@ -171,6 +172,10 @@ class BrandStatsService
             foreach ($this->consumedByService($key, $from, $to, $loc) as $r) {
                 $consumedByService[] = ['brand' => $label, 'service' => $r['name'], 'amount' => $r['amount']];
             }
+
+            foreach ($this->collectionTrend($key, $from, $to, $loc) as $date => $amount) {
+                $trend[$date] = ($trend[$date] ?? 0) + $amount;
+            }
         }
 
         return [
@@ -181,8 +186,39 @@ class BrandStatsService
             'collection_by_category' => $collectionByCategory,
             'consumed_by_category'   => $consumedByCategory,
             'consumed_by_service'    => $consumedByService,
+            'trend'                  => $this->fillTrendGaps($trend, $from, $to),
             'unreachable'            => $unreachable,
         ];
+    }
+
+    /**
+     * A day with no collection must plot as zero, not vanish — otherwise the
+     * line implies activity on dates that had none.
+     */
+    protected function fillTrendGaps(array $trend, string $from, string $to): array
+    {
+        $out    = [];
+        $cursor = \Carbon\Carbon::parse($from)->startOfDay();
+        $end    = \Carbon\Carbon::parse($to)->startOfDay();
+
+        // Guard against an inverted or absurd range producing a runaway loop.
+        if ($cursor->greaterThan($end) || $cursor->diffInDays($end) > 400) {
+            ksort($trend);
+
+            return array_map(
+                fn($d, $v) => ['date' => $d, 'amount' => $v],
+                array_keys($trend),
+                array_values($trend)
+            );
+        }
+
+        while ($cursor->lessThanOrEqualTo($end)) {
+            $d = $cursor->toDateString();
+            $out[] = ['date' => $d, 'amount' => $trend[$d] ?? 0];
+            $cursor->addDay();
+        }
+
+        return $out;
     }
 
     // ---------------------------------------------------------------- charts
@@ -265,6 +301,33 @@ class BrandStatsService
               LIMIT ' . self::TOP_N,
             array_merge([config('brands.invoice_status_paid'), $from, $to], $locationId ? [$locationId] : [])
         );
+    }
+
+    /**
+     * Daily collection across the period, keyed by date.
+     */
+    public function collectionTrend(string $key, string $from, string $to, ?int $locationId): array
+    {
+        $rows = $this->guard($key, function () use ($key, $from, $to, $locationId) {
+            return $this->connection($key)->select(
+                "SELECT DATE(pa.created_at) AS d,
+                        COALESCE(SUM(CASE WHEN pa.cash_flow = 'in' THEN pa.cash_amount ELSE -pa.cash_amount END), 0) AS amount
+                   FROM package_advances pa
+                  WHERE pa.account_id = ? AND pa.is_adjustment = 0 AND pa.is_tax = 0 AND pa.is_cancel = 0
+                    AND (pa.cash_flow = 'in' OR (pa.cash_flow = 'out' AND pa.is_refund = 1))
+                    AND DATE(pa.created_at) BETWEEN ? AND ?"
+                    . ($locationId ? ' AND pa.location_id = ?' : '') .
+                ' GROUP BY d ORDER BY d',
+                array_merge([config('brands.account_id'), $from, $to], $locationId ? [$locationId] : [])
+            );
+        }, []);
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[(string) $r->d] = (float) $r->amount;
+        }
+
+        return $out;
     }
 
     public function consumedByService(string $key, string $from, string $to, ?int $locationId): array
