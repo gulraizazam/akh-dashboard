@@ -85,6 +85,11 @@ class DashboardController extends Controller
                 $now->copy()->subMonthNoOverflow()->startOfMonth(),
                 $now->copy()->subMonthNoOverflow()->endOfMonth(),
             ],
+            'thisyear'  => [$now->copy()->startOfYear(), $now->copy()->endOfYear()],
+            'lastyear'  => [
+                $now->copy()->subYearNoOverflow()->startOfYear(),
+                $now->copy()->subYearNoOverflow()->endOfYear(),
+            ],
             'custom'    => [
                 $from ? Carbon::parse($from)->startOfDay() : $now->copy()->startOfMonth(),
                 $to   ? Carbon::parse($to)->endOfDay()     : $now->copy()->endOfDay(),

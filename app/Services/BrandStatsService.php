@@ -209,8 +209,24 @@ class BrandStatsService
             'branch_arrivals'        => $branchArrivals,
             'doctor_conversion'      => $doctorConversion,
             'trend'                  => $this->fillTrendGaps($trend, $from, $to),
+            'trend_unit'             => $this->trendUnit($from, $to),
             'unreachable'            => $unreachable,
         ];
+    }
+
+    /**
+     * Daily points stop being readable over a long range — a year is well
+     * over three hundred of them — so anything past a quarter is rolled up
+     * into months.
+     */
+    protected const TREND_DAILY_MAX_DAYS = 92;
+
+    protected function trendUnit(string $from, string $to): string
+    {
+        $start = \Carbon\Carbon::parse($from)->startOfDay();
+        $end   = \Carbon\Carbon::parse($to)->startOfDay();
+
+        return $start->diffInDays($end) > self::TREND_DAILY_MAX_DAYS ? 'month' : 'day';
     }
 
     /**
@@ -233,7 +249,7 @@ class BrandStatsService
         }
 
         // Guard against an inverted or absurd range producing a runaway loop.
-        if ($cursor->greaterThan($end) || $cursor->diffInDays($end) > 400) {
+        if ($cursor->greaterThan($end) || $cursor->diffInDays($end) > 800) {
             ksort($trend);
 
             return array_map(
@@ -241,6 +257,30 @@ class BrandStatsService
                 array_keys($trend),
                 array_values($trend)
             );
+        }
+
+        // Over a long range the daily points are too dense to read, so they
+        // are summed into months. Each point is stamped on the first of the
+        // month, which the chart's time axis plots correctly.
+        if ($this->trendUnit($from, $to) === 'month') {
+            $months = [];
+            $m      = $cursor->copy()->startOfMonth();
+            $last   = $end->copy()->startOfMonth();
+            while ($m->lessThanOrEqualTo($last)) {
+                $months[$m->format('Y-m')] = 0;
+                $m->addMonthNoOverflow();
+            }
+            foreach ($trend as $date => $amount) {
+                $k = substr((string) $date, 0, 7);
+                if (array_key_exists($k, $months)) {
+                    $months[$k] += $amount;
+                }
+            }
+            foreach ($months as $k => $amount) {
+                $out[] = ['date' => $k . '-01', 'amount' => $amount];
+            }
+
+            return $out;
         }
 
         while ($cursor->lessThanOrEqualTo($end)) {

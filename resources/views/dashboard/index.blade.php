@@ -71,6 +71,7 @@
                         $periods = [
                             'today' => 'Today', 'yesterday' => 'Yesterday', 'last7days' => 'Last 7 Days',
                             'week' => 'This Week', 'thismonth' => 'This Month', 'lastmonth' => 'Last Month',
+                            'thisyear' => 'This Year', 'lastyear' => 'Last Year',
                             'custom' => 'Custom',
                         ];
                     @endphp
@@ -119,8 +120,11 @@
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center pb-0">
                 <div>
-                    <h5 class="card-title mb-0">Daily Collection</h5>
-                    <small class="text-muted">Cash received per day over the selected period</small>
+                    <h5 class="card-title mb-0">Collection Trend</h5>
+                    {{-- Long ranges are summed per month, so the wording follows. --}}
+                    <small class="text-muted">Cash received per
+                        <span id="trendUnitLabel">{{ ($data['trend_unit'] ?? 'day') === 'month' ? 'month' : 'day' }}</span>
+                        over the selected period</small>
                 </div>
             </div>
             <div class="card-body pt-3">
@@ -411,9 +415,10 @@
         }, rows > 0);
     }
 
-    function renderTrend(points) {
-        const data = (points || []).map(p => ({ x: p.date, y: Number(p.amount || 0) }));
-        const any  = data.some(p => p.y !== 0);
+    function renderTrend(points, unit) {
+        const data    = (points || []).map(p => ({ x: p.date, y: Number(p.amount || 0) }));
+        const any     = data.some(p => p.y !== 0);
+        const monthly = unit === 'month';
 
         mount('chartTrend', {
             chart: {
@@ -436,7 +441,7 @@
             grid: { ...baseGrid, xaxis: { lines: { show: false } }, yaxis: { lines: { show: true } } },
             xaxis: {
                 type: 'datetime',
-                labels: { style: baseLabelStyle, format: 'dd MMM' },
+                labels: { style: baseLabelStyle, format: monthly ? 'MMM yyyy' : 'dd MMM' },
                 axisBorder: { show: false },
                 axisTicks: { show: false },
                 tooltip: { enabled: false },
@@ -444,7 +449,7 @@
             yaxis: { labels: { style: baseLabelStyle, formatter: fmtAmount } },
             tooltip: {
                 style: { fontFamily: FONT },
-                x: { format: 'ddd, dd MMM yyyy' },
+                x: { format: monthly ? 'MMMM yyyy' : 'ddd, dd MMM yyyy' },
                 y: { formatter: fmtFull },
             },
             legend: { show: false },
@@ -653,7 +658,9 @@
     }
 
     function renderAll(d) {
-        renderTrend(d.trend);
+        const unitEl = document.getElementById('trendUnitLabel');
+        if (unitEl) unitEl.textContent = d.trend_unit === 'month' ? 'month' : 'day';
+        renderTrend(d.trend, d.trend_unit);
         renderBrandCompare(d.brand_breakdown);
         renderBranchArrivals(d.branch_arrivals);
         renderDoctorConversion(d.doctor_conversion);
