@@ -152,13 +152,35 @@
     </div>
 </div>
 
+{{-- ---------- Appointments: arrivals + conversion ---------- --}}
+<div class="row g-4 mb-4">
+    <div class="col-xl-7">
+        <div class="card h-100">
+            <div class="card-header pb-0">
+                <h5 class="card-title mb-0">Branch-wise Arrivals</h5>
+                <small class="text-muted">Patients who turned up, consultations vs treatments</small>
+            </div>
+            <div class="card-body pt-3"><div id="chartBranchArrivals"></div></div>
+        </div>
+    </div>
+    <div class="col-xl-5">
+        <div class="card h-100">
+            <div class="card-header pb-0">
+                <h5 class="card-title mb-0">Doctor-wise Conversion</h5>
+                <small class="text-muted">Share of arrived consultations that paid</small>
+            </div>
+            <div class="card-body pt-3"><div id="chartDoctorConversion"></div></div>
+        </div>
+    </div>
+</div>
+
 {{-- ---------- Categories ---------- --}}
 <div class="row g-4 mb-4">
     <div class="col-xl-6">
         <div class="card h-100">
             <div class="card-header pb-0">
                 <h5 class="card-title mb-0">Collection by Service Category</h5>
-                <small class="text-muted">Top 10 categories</small>
+                <small class="text-muted">Area is proportional to amount</small>
             </div>
             <div class="card-body pt-3"><div id="chartCollectionCategory"></div></div>
         </div>
@@ -208,15 +230,12 @@
     };
     const FONT = '"Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif';
 
-    const fmtFull  = v => 'PKR ' + Math.round(Number(v) || 0).toLocaleString();
-    const fmtShort = v => {
-        const n = Math.abs(Number(v) || 0);
-        const s = Number(v) < 0 ? '-' : '';
-        if (n >= 1e7) return s + (n / 1e7).toFixed(1).replace(/\.0$/, '') + 'Cr';
-        if (n >= 1e5) return s + (n / 1e5).toFixed(1).replace(/\.0$/, '') + 'L';
-        if (n >= 1e3) return s + Math.round(n / 1e3) + 'k';
-        return s + Math.round(n);
-    };
+    // Amounts are written out in full, with separators — no lakh/crore
+    // shorthand, so a figure on the chart reads the same as one in a report.
+    const fmtAmount = v => Math.round(Number(v) || 0).toLocaleString('en-US');
+    const fmtFull   = v => 'PKR ' + fmtAmount(v);
+    const fmtCount  = v => Math.round(Number(v) || 0).toLocaleString('en-US');
+    const fmtPct    = v => (Math.round(Number(v) * 10) / 10) + '%';
 
     // ---- data shaping -----------------------------------------------------
 
@@ -259,6 +278,29 @@
             map[label] = (map[label] || 0) + Number(r.amount || 0);
         });
         return map;
+    }
+
+    // Same disambiguation for a single row: prefix the brand only where that
+    // name is shared by more than one, so "Dr Kiran" stays "Dr Kiran" unless
+    // two brands each have one.
+    function labelFor(rows, row, field) {
+        const brandsPerName = {};
+        (rows || []).forEach(r => {
+            const k = (r[field] || 'Unknown').trim().toLowerCase();
+            (brandsPerName[k] = brandsPerName[k] || new Set()).add(r.brand);
+        });
+        const name = row[field] || 'Unknown';
+        const set  = brandsPerName[name.trim().toLowerCase()];
+        return (set && set.size > 1 && row.brand ? row.brand + ' · ' : '') + name;
+    }
+
+    // Arrival rows carry four counts, so they are kept whole rather than
+    // collapsed to a single value; only the label is resolved.
+    function mergeArrivalRows(rows) {
+        return (rows || [])
+            .map(r => Object.assign({}, r, { name: labelFor(rows, r, 'name') }))
+            .sort((a, b) => (b.consult_arrived + b.treat_arrived) - (a.consult_arrived + a.treat_arrived))
+            .slice(0, 12);
     }
 
     // Sort desc and keep the top n.
@@ -332,7 +374,7 @@
                 enabled: true,
                 offsetX: 34,
                 style: { fontSize: '12px', fontWeight: 500, colors: [C.axis], fontFamily: FONT },
-                formatter: fmtShort,
+                formatter: fmtAmount,
             },
             grid: { ...hBarGrid, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
             // On a horizontal bar ApexCharts still reads the names off xaxis;
@@ -343,8 +385,10 @@
                 // negative minimum, so the axis started below zero.
                 min: 0,
                 max: axisMax,
-                tickAmount: 4,
-                labels: { style: baseLabelStyle, formatter: fmtShort },
+                // Written-out amounts are wide, so fewer ticks keeps them from
+                // colliding along the axis.
+                tickAmount: 3,
+                labels: { style: baseLabelStyle, formatter: fmtAmount, rotate: 0, hideOverlappingLabels: true },
                 axisBorder: { show: false },
                 axisTicks: { show: false },
             },
@@ -392,7 +436,7 @@
                 axisTicks: { show: false },
                 tooltip: { enabled: false },
             },
-            yaxis: { labels: { style: baseLabelStyle, formatter: fmtShort } },
+            yaxis: { labels: { style: baseLabelStyle, formatter: fmtAmount } },
             tooltip: {
                 style: { fontFamily: FONT },
                 x: { format: 'ddd, dd MMM yyyy' },
@@ -427,7 +471,7 @@
             grid: { ...baseGrid, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
             xaxis: {
                 categories: labels,
-                labels: { style: baseLabelStyle, formatter: fmtShort },
+                labels: { style: baseLabelStyle, formatter: fmtAmount },
                 axisBorder: { show: false },
                 axisTicks: { show: false },
             },
@@ -441,14 +485,159 @@
         }, rows.length > 0);
     }
 
+    // Treemap: part-to-whole where the slice count is past what a doughnut can
+    // carry. Area does the work, so one hue stepped by rank is enough.
+    function renderCategoryTreemap(rows) {
+        const { labels, values } = top(merge(rows, 'category'), 12);
+        const data = labels.map((l, i) => ({ x: l, y: values[i] }));
+
+        mount('chartCollectionCategory', {
+            chart: {
+                type: 'treemap',
+                height: 360,
+                toolbar: { show: false },
+                fontFamily: FONT,
+                parentHeightOffset: 0,
+            },
+            series: [{ data }],
+            colors: [C.collection],
+            plotOptions: {
+                treemap: {
+                    distributed: false,
+                    enableShades: true,
+                    shadeIntensity: 0.55,
+                    useFillColorAsStroke: false,
+                },
+            },
+            dataLabels: {
+                enabled: true,
+                style: { fontSize: '12px', fontWeight: 500, fontFamily: FONT },
+                formatter: (text, op) => [text, fmtAmount(op.value)],
+                offsetY: -2,
+            },
+            stroke: { width: 2, colors: ['#fff'] },
+            legend: { show: false },
+            tooltip: { style: { fontFamily: FONT }, y: { formatter: fmtFull } },
+        }, data.length > 0);
+    }
+
+    // Vertical grouped column — a different shape from the horizontal money
+    // charts, and counts are short enough to sit under the bars.
+    function renderBranchArrivals(rows) {
+        rows = rows || [];
+        const named = mergeArrivalRows(rows);
+
+        mount('chartBranchArrivals', {
+            chart: {
+                type: 'bar',
+                height: 360,
+                toolbar: { show: false },
+                fontFamily: FONT,
+                parentHeightOffset: 0,
+            },
+            series: [
+                { name: 'Consultations arrived', data: named.map(r => r.consult_arrived) },
+                { name: 'Treatments arrived',    data: named.map(r => r.treat_arrived) },
+            ],
+            colors: [C.collection, C.consumed],
+            plotOptions: {
+                bar: { horizontal: false, borderRadius: 4, borderRadiusApplication: 'end', columnWidth: '58%' },
+            },
+            dataLabels: { enabled: false },
+            stroke: { show: true, width: 2, colors: ['transparent'] },
+            grid: { ...baseGrid, xaxis: { lines: { show: false } }, yaxis: { lines: { show: true } } },
+            xaxis: {
+                categories: named.map(r => r.name),
+                labels: { style: baseLabelStyle, trim: true, hideOverlappingLabels: false, rotate: -35, rotateAlways: named.length > 4 },
+                axisBorder: { show: false },
+                axisTicks: { show: false },
+            },
+            yaxis: { labels: { style: baseLabelStyle, formatter: fmtCount } },
+            legend: {
+                position: 'top', horizontalAlign: 'left', offsetY: 4,
+                markers: { size: 6 }, fontFamily: FONT, labels: { colors: C.axis },
+                itemMargin: { horizontal: 10 },
+            },
+            // Booked and the arrival rate ride along in the tooltip, so the
+            // bars stay a plain count without a second axis.
+            tooltip: {
+                style: { fontFamily: FONT },
+                y: {
+                    formatter: function (val, opts) {
+                        const row    = named[opts.dataPointIndex] || {};
+                        const booked = opts.seriesIndex === 0 ? row.consult_booked : row.treat_booked;
+                        const pct    = booked ? (val / booked) * 100 : 0;
+                        return fmtCount(val) + ' of ' + fmtCount(booked) + ' booked (' + fmtPct(pct) + ')';
+                    },
+                },
+            },
+        }, named.length > 0);
+    }
+
+    // Conversion is a rate, so the bars run 0–100 and the raw counts sit in
+    // the tooltip — a different measure from every other chart here.
+    function renderDoctorConversion(rows) {
+        rows = (rows || [])
+            .map(r => Object.assign({}, r, {
+                label: labelFor(rows, r, 'name'),
+                rate:  r.arrived ? (r.converted / r.arrived) * 100 : 0,
+            }))
+            .sort((a, b) => b.rate - a.rate)
+            .slice(0, 12);
+
+        mount('chartDoctorConversion', {
+            chart: {
+                type: 'bar',
+                height: Math.max(220, rows.length * 34 + 60),
+                toolbar: { show: false },
+                fontFamily: FONT,
+                parentHeightOffset: 0,
+            },
+            series: [{ name: 'Conversion', data: rows.map(r => Math.round(r.rate * 10) / 10) }],
+            colors: [C.collection],
+            plotOptions: {
+                bar: { horizontal: true, borderRadius: 4, borderRadiusApplication: 'end', barHeight: '58%' },
+            },
+            dataLabels: {
+                enabled: true,
+                offsetX: 30,
+                style: { fontSize: '12px', fontWeight: 500, colors: [C.axis], fontFamily: FONT },
+                formatter: fmtPct,
+            },
+            grid: { ...hBarGrid, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
+            xaxis: {
+                categories: rows.map(r => r.label),
+                min: 0, max: 100, tickAmount: 4,
+                labels: { style: baseLabelStyle, formatter: v => Math.round(v) + '%' },
+                axisBorder: { show: false },
+                axisTicks: { show: false },
+            },
+            yaxis: { labels: { style: baseLabelStyle, maxWidth: 200 } },
+            legend: { show: false },
+            tooltip: {
+                style: { fontFamily: FONT },
+                y: {
+                    formatter: function (val, opts) {
+                        const r = rows[opts.dataPointIndex] || {};
+                        return fmtPct(val) + ' — ' + fmtCount(r.converted) + ' of ' +
+                               fmtCount(r.arrived) + ' arrived, ' + fmtFull(r.amount);
+                    },
+                    title: { formatter: () => '' },
+                },
+            },
+        }, rows.length > 0);
+    }
+
     function renderAll(d) {
         renderTrend(d.trend);
         renderBrandCompare(d.brand_breakdown);
+        renderBranchArrivals(d.branch_arrivals);
+        renderDoctorConversion(d.doctor_conversion);
+        renderCategoryTreemap(d.collection_by_category);
         //                                                                cap  label width
-        hBar('chartCollectionBranch',   mergeBranches(d.collection_by_branch),      C.collection, 14, 230);
-        hBar('chartCollectionCategory', merge(d.collection_by_category, 'category'), C.collection, 10, 170);
-        hBar('chartConsumedCategory',   merge(d.consumed_by_category,   'category'), C.consumed,   10, 170);
-        hBar('chartConsumedService',    merge(d.consumed_by_service,    'service'),  C.consumed,   12, 300);
+        hBar('chartCollectionBranch', mergeBranches(d.collection_by_branch),    C.collection, 14, 230);
+        hBar('chartConsumedCategory', merge(d.consumed_by_category, 'category'), C.consumed,  10, 170);
+        hBar('chartConsumedService',  merge(d.consumed_by_service,  'service'),  C.consumed,  12, 300);
     }
 
     renderAll(payload);

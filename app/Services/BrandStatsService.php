@@ -137,6 +137,8 @@ class BrandStatsService
         $collectionByCategory = [];
         $consumedByCategory   = [];
         $consumedByService    = [];
+        $branchArrivals       = [];
+        $doctorConversion     = [];
         $unreachable          = [];
         $trend                = [];
 
@@ -184,6 +186,13 @@ class BrandStatsService
                 $consumedByService[] = ['brand' => $label, 'service' => $r['name'], 'amount' => $r['amount']];
             }
 
+            foreach ($this->branchArrivals($key, $from, $to, $loc) as $r) {
+                $branchArrivals[] = $r + ['brand' => $label];
+            }
+            foreach ($this->doctorConversion($key, $from, $to, $loc) as $r) {
+                $doctorConversion[] = $r + ['brand' => $label];
+            }
+
             foreach ($this->collectionTrend($key, $from, $to, $loc) as $date => $amount) {
                 $trend[$date] = ($trend[$date] ?? 0) + $amount;
             }
@@ -197,6 +206,8 @@ class BrandStatsService
             'collection_by_category' => $collectionByCategory,
             'consumed_by_category'   => $consumedByCategory,
             'consumed_by_service'    => $consumedByService,
+            'branch_arrivals'        => $branchArrivals,
+            'doctor_conversion'      => $doctorConversion,
             'trend'                  => $this->fillTrendGaps($trend, $from, $to),
             'unreachable'            => $unreachable,
         ];
@@ -366,6 +377,103 @@ class BrandStatsService
               LIMIT ' . self::TOP_N,
             array_merge([config('brands.invoice_status_paid'), $from, $to], $locationId ? [$locationId] : [])
         );
+    }
+
+    /**
+     * Booked vs arrived per centre, split by consultation and treatment.
+     */
+    public function branchArrivals(string $key, string $from, string $to, ?int $locationId): array
+    {
+        $excluded = config('brands.excluded_locations', []);
+
+        return $this->guard($key, function () use ($key, $from, $to, $locationId, $excluded) {
+            $rows = $this->connection($key)->select(
+                'SELECT l.name AS name,
+                        SUM(a.appointment_type_id = ?)                                AS consult_booked,
+                        SUM(a.appointment_type_id = ? AND a.appointment_status_id = ?) AS consult_arrived,
+                        SUM(a.appointment_type_id = ?)                                AS treat_booked,
+                        SUM(a.appointment_type_id = ? AND a.appointment_status_id = ?) AS treat_arrived
+                   FROM appointments a
+                   JOIN locations l ON l.id = a.location_id
+                  WHERE DATE(a.scheduled_date) BETWEEN ? AND ?
+                    AND l.name NOT IN (' . $this->placeholders($excluded) . ')'
+                    . ($locationId ? ' AND a.location_id = ?' : '') .
+                ' GROUP BY l.id, l.name
+                  HAVING consult_booked > 0 OR treat_booked > 0
+                  ORDER BY (consult_arrived + treat_arrived) DESC',
+                array_merge(
+                    [
+                        config('brands.appointment_type_consult'),
+                        config('brands.appointment_type_consult'), config('brands.appointment_status_arrived'),
+                        config('brands.appointment_type_service'),
+                        config('brands.appointment_type_service'), config('brands.appointment_status_arrived'),
+                        $from, $to,
+                    ],
+                    $excluded,
+                    $locationId ? [$locationId] : []
+                )
+            );
+
+            return array_map(fn($r) => [
+                'name'            => $r->name ?: 'Unknown',
+                'consult_booked'  => (int) $r->consult_booked,
+                'consult_arrived' => (int) $r->consult_arrived,
+                'treat_booked'    => (int) $r->treat_booked,
+                'treat_arrived'   => (int) $r->treat_arrived,
+            ], $rows);
+        }, []);
+    }
+
+    /**
+     * Per doctor: arrived consultations, how many turned into a payment, and
+     * what those payments were worth.
+     *
+     * "Converted" means an arrived consultation with at least one cash-in
+     * advance recorded against it inside the period — the same test the brand
+     * apps' own doctor-conversion report applies, expressed as one query.
+     */
+    public function doctorConversion(string $key, string $from, string $to, ?int $locationId): array
+    {
+        return $this->guard($key, function () use ($key, $from, $to, $locationId) {
+            $rows = $this->connection($key)->select(
+                "SELECT u.name AS name,
+                        COUNT(DISTINCT a.id)              AS arrived,
+                        COUNT(DISTINCT pa.appointment_id) AS converted,
+                        COALESCE(SUM(pa.cash_amount), 0)  AS amount
+                   FROM appointments a
+                   JOIN users u ON u.id = a.doctor_id
+                   LEFT JOIN package_advances pa
+                          ON pa.appointment_id = a.id
+                         AND pa.cash_flow = 'in'
+                         AND pa.cash_amount > 0
+                         AND pa.is_adjustment = 0 AND pa.is_tax = 0 AND pa.is_cancel = 0
+                         AND DATE(pa.created_at) BETWEEN ? AND ?
+                  WHERE a.appointment_status_id = ?
+                    AND a.appointment_type_id = ?
+                    AND DATE(a.scheduled_date) BETWEEN ? AND ?"
+                    . ($locationId ? ' AND a.location_id = ?' : '') .
+                ' GROUP BY u.id, u.name
+                  HAVING arrived > 0
+                  ORDER BY arrived DESC
+                  LIMIT ' . self::TOP_N,
+                array_merge(
+                    [
+                        $from, $to,
+                        config('brands.appointment_status_arrived'),
+                        config('brands.appointment_type_consult'),
+                        $from, $to,
+                    ],
+                    $locationId ? [$locationId] : []
+                )
+            );
+
+            return array_map(fn($r) => [
+                'name'      => $r->name ?: 'Unknown',
+                'arrived'   => (int) $r->arrived,
+                'converted' => (int) $r->converted,
+                'amount'    => (float) $r->amount,
+            ], $rows);
+        }, []);
     }
 
     // ----------------------------------------------------------- totals SQL
