@@ -29,11 +29,12 @@ return [
     /*
      | Values that are identical across all six brand databases (verified).
      */
-    'account_id'              => 1, // every brand DB has exactly one account
-    'invoice_status_paid'     => 3, // invoice_statuses.slug = 'paid'
+    'account_id'               => 1, // every brand DB has exactly one account
+    'invoice_status_paid'      => 3, // invoice_statuses.slug = 'paid'
     'appointment_type_consult' => 1,
     'appointment_type_service' => 2,
-    'user_type_patient'       => 3,
+    'appointment_status_arrived' => 2, // appointment_statuses: 2 = Arrived
+    'user_type_patient'        => 3,
 
     'items' => [
 

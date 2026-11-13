@@ -93,19 +93,27 @@ class BrandStatsService
     public function totals(string $key, string $from, string $to, ?int $locationId = null): array
     {
         return $this->guard($key, function () use ($key, $from, $to, $locationId) {
-            $db = $this->connection($key);
+            $db      = $this->connection($key);
+            $consult = config('brands.appointment_type_consult');
+            $service = config('brands.appointment_type_service');
 
             return [
                 'collection'    => (float) $this->scalar($db, $this->collectionSql('', $locationId), $this->collectionBindings($from, $to, $locationId)),
                 'consumed'      => (float) $this->scalar($db, $this->consumedSql($locationId), $this->consumedBindings($from, $to, $locationId)),
-                'consultations' => (int)   $this->scalar($db, $this->appointmentCountSql($locationId), $this->appointmentBindings(config('brands.appointment_type_consult'), $from, $to, $locationId)),
-                'treatments'    => (int)   $this->scalar($db, $this->appointmentCountSql($locationId), $this->appointmentBindings(config('brands.appointment_type_service'), $from, $to, $locationId)),
-                'leads'         => (int)   $this->scalar($db, $this->leadsSql($locationId), $this->leadsBindings($from, $to, $locationId)),
-                'plans'         => (int)   $this->scalar($db, $this->plansSql($locationId), $this->plansBindings($from, $to, $locationId)),
+
+                'consultations'          => (int) $this->scalar($db, $this->appointmentCountSql($locationId),       $this->appointmentBindings($consult, $from, $to, $locationId)),
+                'consultations_arrived'  => (int) $this->scalar($db, $this->appointmentCountSql($locationId, true), $this->appointmentBindings($consult, $from, $to, $locationId, true)),
+                'treatments'             => (int) $this->scalar($db, $this->appointmentCountSql($locationId),       $this->appointmentBindings($service, $from, $to, $locationId)),
+                'treatments_arrived'     => (int) $this->scalar($db, $this->appointmentCountSql($locationId, true), $this->appointmentBindings($service, $from, $to, $locationId, true)),
+
+                'leads'         => (int) $this->scalar($db, $this->leadsSql($locationId), $this->leadsBindings($from, $to, $locationId)),
+                'plans'         => (int) $this->scalar($db, $this->plansSql($locationId), $this->plansBindings($from, $to, $locationId)),
             ];
         }, [
-            'collection' => 0.0, 'consumed' => 0.0, 'consultations' => 0,
-            'treatments' => 0, 'leads' => 0, 'plans' => 0,
+            'collection' => 0.0, 'consumed' => 0.0,
+            'consultations' => 0, 'consultations_arrived' => 0,
+            'treatments' => 0, 'treatments_arrived' => 0,
+            'leads' => 0, 'plans' => 0,
         ]);
     }
 
@@ -118,7 +126,8 @@ class BrandStatsService
 
         $totals = [
             'total_collection' => 0.0, 'total_consumed' => 0.0,
-            'total_consultations' => 0, 'total_treatments' => 0,
+            'total_consultations' => 0, 'total_consultations_arrived' => 0,
+            'total_treatments' => 0, 'total_treatments_arrived' => 0,
             'total_leads' => 0, 'total_plans' => 0,
         ];
 
@@ -144,12 +153,14 @@ class BrandStatsService
 
             $t = $this->totals($key, $from, $to, $loc);
 
-            $totals['total_collection']    += $t['collection'];
-            $totals['total_consumed']      += $t['consumed'];
-            $totals['total_consultations'] += $t['consultations'];
-            $totals['total_treatments']    += $t['treatments'];
-            $totals['total_leads']         += $t['leads'];
-            $totals['total_plans']         += $t['plans'];
+            $totals['total_collection']            += $t['collection'];
+            $totals['total_consumed']              += $t['consumed'];
+            $totals['total_consultations']         += $t['consultations'];
+            $totals['total_consultations_arrived'] += $t['consultations_arrived'];
+            $totals['total_treatments']            += $t['treatments'];
+            $totals['total_treatments_arrived']    += $t['treatments_arrived'];
+            $totals['total_leads']                 += $t['leads'];
+            $totals['total_plans']                 += $t['plans'];
 
             $brandBreakdown[] = [
                 'brand'      => $label,
@@ -388,18 +399,23 @@ class BrandStatsService
         return array_merge([config('brands.invoice_status_paid'), $from, $to], $locationId ? [$locationId] : []);
     }
 
-    protected function appointmentCountSql(?int $locationId): string
+    protected function appointmentCountSql(?int $locationId, bool $arrivedOnly = false): string
     {
         return 'SELECT COUNT(*) AS v
                   FROM appointments a
                  WHERE a.appointment_type_id = ?
                    AND DATE(a.scheduled_date) BETWEEN ? AND ?'
+               . ($arrivedOnly ? ' AND a.appointment_status_id = ?' : '')
                . ($locationId ? ' AND a.location_id = ?' : '');
     }
 
-    protected function appointmentBindings(int $type, string $from, string $to, ?int $locationId): array
+    protected function appointmentBindings(int $type, string $from, string $to, ?int $locationId, bool $arrivedOnly = false): array
     {
-        return array_merge([$type, $from, $to], $locationId ? [$locationId] : []);
+        return array_merge(
+            [$type, $from, $to],
+            $arrivedOnly ? [config('brands.appointment_status_arrived')] : [],
+            $locationId ? [$locationId] : []
+        );
     }
 
     /**

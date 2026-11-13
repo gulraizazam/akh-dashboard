@@ -507,11 +507,15 @@
             payload = json.data;
 
             const t = payload.totals || {};
+            const num = v => Math.round(Number(v) || 0).toLocaleString();
             document.querySelectorAll('[data-stat]').forEach(el => {
                 const v = t[el.dataset.stat];
-                el.textContent = (v === undefined || v === null)
-                    ? '—'
-                    : Math.round(Number(v)).toLocaleString();
+                if (v === undefined || v === null) { el.textContent = '—'; return; }
+                // Consultations and treatments read "arrived / booked".
+                const arrivedKey = el.dataset.statArrived;
+                el.textContent = arrivedKey
+                    ? num(t[arrivedKey]) + ' / ' + num(v)
+                    : num(v);
             });
 
             const un = payload.unreachable || [];
