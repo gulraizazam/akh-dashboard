@@ -158,7 +158,7 @@
         <div class="card h-100">
             <div class="card-header pb-0">
                 <h5 class="card-title mb-0">Collection by Service Category</h5>
-                <small class="text-muted">Top categories</small>
+                <small class="text-muted">Top 10 categories</small>
             </div>
             <div class="card-body pt-3"><div id="chartCollectionCategory"></div></div>
         </div>
@@ -167,7 +167,7 @@
         <div class="card h-100">
             <div class="card-header pb-0">
                 <h5 class="card-title mb-0">Consumed by Service Category</h5>
-                <small class="text-muted">Top categories</small>
+                <small class="text-muted">Top 10 categories</small>
             </div>
             <div class="card-body pt-3"><div id="chartConsumedCategory"></div></div>
         </div>
@@ -180,7 +180,7 @@
         <div class="card">
             <div class="card-header pb-0">
                 <h5 class="card-title mb-0">Top Services by Consumed</h5>
-                <small class="text-muted">Invoiced value per service</small>
+                <small class="text-muted">Top 12 by invoiced value</small>
             </div>
             <div class="card-body pt-3"><div id="chartConsumedService"></div></div>
         </div>
@@ -220,29 +220,57 @@
 
     // ---- data shaping -----------------------------------------------------
 
-    // Merge rows into {label: total}. The brand is prefixed only when the view
-    // spans several, so a single-brand view doesn't repeat what the filter says.
+    // Fold the same name across brands into one row: a category like "Hair
+    // Transplant" is the same thing everywhere, and keeping them apart turned
+    // 28 categories into 41 rows, most of which fell off the chart. Matched
+    // case-insensitively ("Weight loss" / "Weight Loss"), keeping whichever
+    // spelling appeared first.
     function merge(rows, keyField) {
         rows = rows || [];
-        const multi = new Set(rows.map(r => r.brand)).size > 1;
         const map = {};
         rows.forEach(r => {
-            const label = (multi && r.brand ? r.brand + ' · ' : '') + (r[keyField] || 'Unknown');
+            const name = r[keyField] || 'Unknown';
+            const key  = name.trim().toLowerCase();
+            if (!map[key]) map[key] = { label: name, value: 0 };
+            map[key].value += Number(r.amount || 0);
+        });
+        const out = {};
+        Object.values(map).forEach(e => { out[e.label] = e.value; });
+        return out;
+    }
+
+    // Branches keep their own row per brand — they are distinct places. Branch
+    // names already carry the brand ("American Aesthetics Bahadurabad"), so the
+    // prefix is only added where one name is used by two brands, as
+    // "Alkhaleej DHA Karachi" is by both Hair and Skin.
+    function mergeBranches(rows) {
+        rows = rows || [];
+        const brandsPerName = {};
+        rows.forEach(r => {
+            const k = (r.branch || 'Unknown').trim().toLowerCase();
+            (brandsPerName[k] = brandsPerName[k] || new Set()).add(r.brand);
+        });
+
+        const map = {};
+        rows.forEach(r => {
+            const name     = r.branch || 'Unknown';
+            const collides = brandsPerName[name.trim().toLowerCase()].size > 1;
+            const label    = (collides && r.brand ? r.brand + ' · ' : '') + name;
             map[label] = (map[label] || 0) + Number(r.amount || 0);
         });
         return map;
     }
 
-    // Sort desc, keep the top n, fold the tail into "Other" rather than
-    // rendering 60 unreadable bars.
-    function topN(map, n) {
-        const sorted = Object.entries(map).sort((a, b) => b[1] - a[1]);
-        const head = sorted.slice(0, n);
-        const tail = sorted.slice(n);
-        if (tail.length) {
-            head.push(['Other (' + tail.length + ')', tail.reduce((s, e) => s + e[1], 0)]);
-        }
-        return { labels: head.map(e => e[0]), values: head.map(e => e[1]) };
+    // Sort desc and keep the top n.
+    //
+    // No "Other" bar: the server already caps each brand's series, so a
+    // remainder computed here would cover only part of the tail while looking
+    // like the whole of it — and it came out longer than every real bar,
+    // dominating the chart with a number that wasn't true. These cards say
+    // "Top N", which is what they now show.
+    function top(map, n) {
+        const sorted = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, n);
+        return { labels: sorted.map(e => e[0]), values: sorted.map(e => e[1]) };
     }
 
     // ---- chart factories --------------------------------------------------
@@ -267,12 +295,18 @@
         strokeDashArray: 0,
         padding: { top: -8, right: 8, bottom: 0, left: 8 },
     };
+    // Horizontal bars print their value past the bar end, so the plot needs
+    // room on the right or the longest bar's label is clipped at the frame.
+    const hBarGrid = { ...baseGrid, padding: { top: -8, right: 56, bottom: 0, left: 8 } };
     const baseLabelStyle = { colors: C.axis, fontSize: '12px', fontFamily: FONT };
 
     // Horizontal bar: the default for long category/branch names.
-    function hBar(id, map, color, cap) {
-        const { labels, values } = topN(map, cap || 10);
+    function hBar(id, map, color, cap, labelWidth) {
+        const { labels, values } = top(map, cap || 10);
         const rows = labels.length;
+        // Headroom past the longest bar, so its value label has somewhere to
+        // sit instead of being clipped against the plot frame.
+        const axisMax = Math.max(...values, 0) * 1.18 || undefined;
 
         mount(id, {
             chart: {
@@ -300,14 +334,24 @@
                 style: { fontSize: '12px', fontWeight: 500, colors: [C.axis], fontFamily: FONT },
                 formatter: fmtShort,
             },
-            grid: { ...baseGrid, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
+            grid: { ...hBarGrid, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
+            // On a horizontal bar ApexCharts still reads the names off xaxis;
+            // without this it falls back to numeric row indices.
             xaxis: {
+                categories: labels,
+                // Both ends pinned: giving only a max lets ApexCharts pick a
+                // negative minimum, so the axis started below zero.
+                min: 0,
+                max: axisMax,
+                tickAmount: 4,
                 labels: { style: baseLabelStyle, formatter: fmtShort },
                 axisBorder: { show: false },
                 axisTicks: { show: false },
             },
             yaxis: {
-                labels: { style: baseLabelStyle, maxWidth: 240 },
+                // Capped to what the card can actually hold: left longer, the
+                // label overflows the card edge instead of ellipsising.
+                labels: { style: baseLabelStyle, maxWidth: labelWidth || 180 },
             },
             tooltip: {
                 style: { fontFamily: FONT },
@@ -400,10 +444,11 @@
     function renderAll(d) {
         renderTrend(d.trend);
         renderBrandCompare(d.brand_breakdown);
-        hBar('chartCollectionBranch',   merge(d.collection_by_branch,   'branch'),   C.collection, 12);
-        hBar('chartCollectionCategory', merge(d.collection_by_category, 'category'), C.collection, 8);
-        hBar('chartConsumedCategory',   merge(d.consumed_by_category,   'category'), C.consumed,   8);
-        hBar('chartConsumedService',    merge(d.consumed_by_service,    'service'),  C.consumed,   12);
+        //                                                                cap  label width
+        hBar('chartCollectionBranch',   mergeBranches(d.collection_by_branch),      C.collection, 14, 230);
+        hBar('chartCollectionCategory', merge(d.collection_by_category, 'category'), C.collection, 10, 170);
+        hBar('chartConsumedCategory',   merge(d.consumed_by_category,   'category'), C.consumed,   10, 170);
+        hBar('chartConsumedService',    merge(d.consumed_by_service,    'service'),  C.consumed,   12, 300);
     }
 
     renderAll(payload);
