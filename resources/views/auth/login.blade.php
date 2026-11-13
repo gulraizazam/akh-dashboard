@@ -1,6 +1,12 @@
 @extends('layouts.guest')
 @section('title', 'Login')
 
+@push('styles')
+{{-- Sneat keeps the auth layout out of core.css: this is what caps the card
+     at 460px and centres it in the viewport. --}}
+<link rel="stylesheet" href="{{ asset('assets/vendor/css/pages/page-auth.css') }}">
+@endpush
+
 @section('content')
     <div class="authentication-wrapper authentication-basic container-p-y">
         <div class="authentication-inner">
@@ -27,7 +33,7 @@
                         </div>
                     @endif
 
-                    <form method="POST" action="{{ route('login') }}" class="mb-5">
+                    <form method="POST" action="{{ route('login') }}">
                         @csrf
 
                         <div class="mb-5">
@@ -54,9 +60,7 @@
                             </div>
                         </div>
 
-                        <div class="mb-5">
-                            <button class="btn btn-primary d-grid w-100" type="submit">Sign in</button>
-                        </div>
+                        <button class="btn btn-primary d-grid w-100" type="submit">Sign in</button>
                     </form>
 
                 </div>
