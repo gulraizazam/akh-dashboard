@@ -398,9 +398,11 @@ class BrandStatsService
                   WHERE DATE(a.scheduled_date) BETWEEN ? AND ?
                     AND l.name NOT IN (' . $this->placeholders($excluded) . ')'
                     . ($locationId ? ' AND a.location_id = ?' : '') .
+                // No ORDER BY: MySQL rejects an aggregate alias used inside an
+                // expression there ("reference to group function"), and the
+                // caller ranks these rows anyway.
                 ' GROUP BY l.id, l.name
-                  HAVING consult_booked > 0 OR treat_booked > 0
-                  ORDER BY (consult_arrived + treat_arrived) DESC',
+                  HAVING consult_booked > 0 OR treat_booked > 0',
                 array_merge(
                     [
                         config('brands.appointment_type_consult'),
