@@ -152,30 +152,30 @@
     </div>
 </div>
 
-{{-- ---------- Appointments: arrivals + conversion ---------- --}}
+{{-- ---------- Branch arrivals (full width: ten long centre names) ---------- --}}
 <div class="row g-4 mb-4">
-    <div class="col-xl-7">
-        <div class="card h-100">
+    <div class="col-12">
+        <div class="card">
             <div class="card-header pb-0">
                 <h5 class="card-title mb-0">Branch-wise Arrivals</h5>
-                <small class="text-muted">Patients who turned up, consultations vs treatments</small>
+                <small class="text-muted">Patients who turned up, consultations vs treatments &mdash; hover for booked counts and arrival rate</small>
             </div>
             <div class="card-body pt-3"><div id="chartBranchArrivals"></div></div>
         </div>
     </div>
-    <div class="col-xl-5">
+</div>
+
+{{-- ---------- Conversion + category mix ---------- --}}
+<div class="row g-4 mb-4">
+    <div class="col-xl-6">
         <div class="card h-100">
             <div class="card-header pb-0">
                 <h5 class="card-title mb-0">Doctor-wise Conversion</h5>
-                <small class="text-muted">Share of arrived consultations that paid</small>
+                <small class="text-muted">Arrived consultations and how many paid</small>
             </div>
             <div class="card-body pt-3"><div id="chartDoctorConversion"></div></div>
         </div>
     </div>
-</div>
-
-{{-- ---------- Categories ---------- --}}
-<div class="row g-4 mb-4">
     <div class="col-xl-6">
         <div class="card h-100">
             <div class="card-header pb-0">
@@ -185,8 +185,12 @@
             <div class="card-body pt-3"><div id="chartCollectionCategory"></div></div>
         </div>
     </div>
-    <div class="col-xl-6">
-        <div class="card h-100">
+</div>
+
+{{-- ---------- Consumed categories ---------- --}}
+<div class="row g-4 mb-4">
+    <div class="col-12">
+        <div class="card">
             <div class="card-header pb-0">
                 <h5 class="card-title mb-0">Consumed by Service Category</h5>
                 <small class="text-muted">Top 10 categories</small>
@@ -346,9 +350,10 @@
     function hBar(id, map, color, cap, labelWidth) {
         const { labels, values } = top(map, cap || 10);
         const rows = labels.length;
-        // Headroom past the longest bar, so its value label has somewhere to
-        // sit instead of being clipped against the plot frame.
-        const axisMax = Math.max(...values, 0) * 1.18 || undefined;
+        // Headroom past the longest bar so its value label has somewhere to
+        // sit. Written-out amounts are far wider than the old shorthand, so
+        // this is generous — at 1.18 the longest label landed on the bar.
+        const axisMax = Math.max(...values, 0) * 1.45 || undefined;
 
         mount(id, {
             chart: {
@@ -494,7 +499,7 @@
         mount('chartCollectionCategory', {
             chart: {
                 type: 'treemap',
-                height: 360,
+                height: 470,
                 toolbar: { show: false },
                 fontFamily: FONT,
                 parentHeightOffset: 0,
@@ -548,7 +553,18 @@
             grid: { ...baseGrid, xaxis: { lines: { show: false } }, yaxis: { lines: { show: true } } },
             xaxis: {
                 categories: named.map(r => r.name),
-                labels: { style: baseLabelStyle, trim: true, hideOverlappingLabels: false, rotate: -35, rotateAlways: named.length > 4 },
+                // Centre names run long, so they tilt and get room to drop
+                // rather than being cut to "Alkhaleej Bahad…".
+                labels: {
+                    style: baseLabelStyle,
+                    // Trimmed, not free-running: the two names that carry a
+                    // brand prefix otherwise bleed off the left of the card.
+                    trim: true,
+                    hideOverlappingLabels: false,
+                    rotate: -45,
+                    rotateAlways: true,
+                    maxHeight: 170,
+                },
                 axisBorder: { show: false },
                 axisTicks: { show: false },
             },
@@ -574,53 +590,61 @@
         }, named.length > 0);
     }
 
-    // Conversion is a rate, so the bars run 0–100 and the raw counts sit in
-    // the tooltip — a different measure from every other chart here.
+    // Conversion as a rate on a 0–100 axis.
+    //
+    // Counts can't carry this: one doctor sees ~430 arrivals and the rest
+    // under sixty, so plotting volume squashed every other bar to a sliver.
+    // The rate puts them on one comparable scale, and the row order (by
+    // volume) keeps the busiest doctors at the top. The rate rides in the
+    // category label rather than a data label, which had nowhere to sit once
+    // a bar reached 100.
+    //
+    // Doctors under five arrivals are left out: three-for-three is a 100%
+    // that says nothing, and it outranked 26-of-35 when the rate drove the
+    // sort.
+    const DOCTOR_MIN_ARRIVED = 5;
+
     function renderDoctorConversion(rows) {
         rows = (rows || [])
+            .filter(r => r.arrived >= DOCTOR_MIN_ARRIVED)
             .map(r => Object.assign({}, r, {
                 label: labelFor(rows, r, 'name'),
                 rate:  r.arrived ? (r.converted / r.arrived) * 100 : 0,
             }))
-            .sort((a, b) => b.rate - a.rate)
+            .sort((a, b) => b.arrived - a.arrived)
             .slice(0, 12);
 
         mount('chartDoctorConversion', {
             chart: {
                 type: 'bar',
-                height: Math.max(220, rows.length * 34 + 60),
+                height: Math.max(260, rows.length * 38 + 70),
                 toolbar: { show: false },
                 fontFamily: FONT,
                 parentHeightOffset: 0,
             },
-            series: [{ name: 'Conversion', data: rows.map(r => Math.round(r.rate * 10) / 10) }],
+            series: [{ name: 'Converted', data: rows.map(r => Math.round(r.rate * 10) / 10) }],
             colors: [C.collection],
             plotOptions: {
-                bar: { horizontal: true, borderRadius: 4, borderRadiusApplication: 'end', barHeight: '58%' },
+                bar: { horizontal: true, borderRadius: 4, borderRadiusApplication: 'end', barHeight: '62%' },
             },
-            dataLabels: {
-                enabled: true,
-                offsetX: 30,
-                style: { fontSize: '12px', fontWeight: 500, colors: [C.axis], fontFamily: FONT },
-                formatter: fmtPct,
-            },
-            grid: { ...hBarGrid, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
+            dataLabels: { enabled: false },
+            grid: { ...baseGrid, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
             xaxis: {
-                categories: rows.map(r => r.label),
+                categories: rows.map(r => r.label + '  ·  ' + fmtPct(r.rate)),
                 min: 0, max: 100, tickAmount: 4,
                 labels: { style: baseLabelStyle, formatter: v => Math.round(v) + '%' },
                 axisBorder: { show: false },
                 axisTicks: { show: false },
             },
-            yaxis: { labels: { style: baseLabelStyle, maxWidth: 200 } },
+            yaxis: { labels: { style: baseLabelStyle, maxWidth: 270 } },
             legend: { show: false },
             tooltip: {
                 style: { fontFamily: FONT },
                 y: {
                     formatter: function (val, opts) {
                         const r = rows[opts.dataPointIndex] || {};
-                        return fmtPct(val) + ' — ' + fmtCount(r.converted) + ' of ' +
-                               fmtCount(r.arrived) + ' arrived, ' + fmtFull(r.amount);
+                        return fmtCount(r.converted) + ' of ' + fmtCount(r.arrived) +
+                               ' arrived converted · ' + fmtFull(r.amount);
                     },
                     title: { formatter: () => '' },
                 },
@@ -636,7 +660,7 @@
         renderCategoryTreemap(d.collection_by_category);
         //                                                                cap  label width
         hBar('chartCollectionBranch', mergeBranches(d.collection_by_branch),    C.collection, 14, 230);
-        hBar('chartConsumedCategory', merge(d.consumed_by_category, 'category'), C.consumed,  10, 170);
+        hBar('chartConsumedCategory', merge(d.consumed_by_category, 'category'), C.consumed,  10, 300);
         hBar('chartConsumedService',  merge(d.consumed_by_service,  'service'),  C.consumed,  12, 300);
     }
 
