@@ -82,6 +82,12 @@
             </div>
         </div>
 
+        {{-- ---------- Unreachable brands ---------- --}}
+        <div id="unreachableAlert" class="alert alert-warning d-flex align-items-center {{ empty($data['unreachable']) ? 'd-none' : '' }}">
+            <i class="ti ti-database-exclamation me-2"></i>
+            <span>Not counted (database unreachable or not configured): <strong id="unreachableList">{{ implode(', ', $data['unreachable'] ?? []) }}</strong></span>
+        </div>
+
         {{-- ---------- Stat tiles ---------- --}}
         <div class="row row-cards g-3 mb-3" id="statCards">
             @include('dashboard.partials.stats', ['totals' => $data['totals']])
@@ -126,9 +132,9 @@
             <div class="col-lg-6">
                 <div class="card h-100">
                     <div class="card-header">
-                        <h3 class="card-title"><i class="ti ti-report-analytics me-1 text-rose"></i> Collection by Service</h3>
+                        <h3 class="card-title"><i class="ti ti-report-analytics me-1 text-rose"></i> Top Services by Consumed</h3>
                     </div>
-                    <div class="card-body"><canvas id="chartCollectionService" height="140"></canvas></div>
+                    <div class="card-body"><canvas id="chartConsumedService" height="140"></canvas></div>
                 </div>
             </div>
             <div class="col-lg-6">
@@ -211,7 +217,7 @@
         buildChart('chartConsumedBranch',     'bar',      sumByKey(d.consumed_by_branch,     'branch',   'amount'));
         buildChart('chartCollectionCategory', 'doughnut', sumByKey(d.collection_by_category, 'category', 'amount'));
         buildChart('chartConsumedCategory',   'doughnut', sumByKey(d.consumed_by_category,   'category', 'amount'));
-        buildChart('chartCollectionService',  'bar',      sumByKey(d.collection_by_service,  'service',  'amount'));
+        buildChart('chartConsumedService',    'bar',      sumByKey(d.consumed_by_service,    'service',  'amount'));
 
         const bb = d.brand_breakdown || [];
         const ctx = document.getElementById('chartBrandBreakdown');
@@ -288,6 +294,12 @@
                 const key = el.dataset.stat;
                 el.textContent = formatValue(key, t[key]);
             });
+
+            const un = payload.unreachable || [];
+            const alertEl = document.getElementById('unreachableAlert');
+            document.getElementById('unreachableList').textContent = un.join(', ');
+            alertEl.classList.toggle('d-none', un.length === 0);
+
             renderCharts(payload);
         } finally {
             applyBtn.disabled = false;

@@ -2,94 +2,94 @@
 
 namespace App\Http\Controllers;
 
-use App\Services\BrandApiService;
+use App\Services\BrandStatsService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 
 class DashboardController extends Controller
 {
-    public function __construct(protected BrandApiService $api) {}
+    public function __construct(protected BrandStatsService $stats) {}
 
     public function index(Request $request)
     {
         $filters = $this->filters($request);
-        $data    = $this->api->aggregateStats($filters['brand'], $this->apiParams($filters));
 
         return view('dashboard.index', [
-            'brands'  => $this->api->brands(),
+            'brands'  => $this->stats->brands(),
             'filters' => $filters,
-            'data'    => $data,
+            'data'    => $this->aggregate($filters),
         ]);
     }
 
     public function locations(Request $request)
     {
         $brand = $request->string('brand')->toString();
-        if ($brand === '') {
+
+        if ($brand === '' || ! $this->stats->brand($brand)) {
             return response()->json(['data' => []]);
         }
 
-        return response()->json([
-            'data' => $this->api->locations($brand),
-        ]);
+        return response()->json(['data' => $this->stats->locations($brand)]);
     }
 
     public function stats(Request $request)
     {
         $filters = $this->filters($request);
+
         return response()->json([
             'filters' => $filters,
-            'data'    => $this->api->aggregateStats($filters['brand'], $this->apiParams($filters)),
+            'data'    => $this->aggregate($filters),
         ]);
+    }
+
+    protected function aggregate(array $filters): array
+    {
+        return $this->stats->aggregate(
+            $filters['brand'],
+            $filters['from'],
+            $filters['to'],
+            $filters['location'] ? (int) $filters['location'] : null,
+        );
     }
 
     protected function filters(Request $request): array
     {
+        $brand = $request->string('brand')->toString();
+        if ($brand === '' || ! $this->stats->brand($brand)) {
+            $brand = null;
+        }
+
         $period = $request->input('period', 'thismonth');
         [$start, $end] = $this->resolvePeriod($period, $request->input('from'), $request->input('to'));
 
         return [
-            'brand'    => $request->filled('brand') ? $request->string('brand')->toString() : null,
-            'location' => $request->filled('location') ? $request->string('location')->toString() : null,
+            'brand'    => $brand,
+            // A centre only makes sense once a brand is picked.
+            'location' => $brand && $request->filled('location') ? $request->string('location')->toString() : null,
             'period'   => $period,
             'from'     => $start->toDateString(),
             'to'       => $end->toDateString(),
         ];
     }
 
-    protected function apiParams(array $filters): array
-    {
-        return array_filter([
-            'from'     => $filters['from'],
-            'to'       => $filters['to'],
-            'location' => $filters['location'],
-        ], fn($v) => $v !== null && $v !== '');
-    }
-
     protected function resolvePeriod(string $period, ?string $from, ?string $to): array
     {
         $now = Carbon::now();
 
-        switch ($period) {
-            case 'today':
-                return [$now->copy()->startOfDay(), $now->copy()->endOfDay()];
-            case 'yesterday':
-                $y = $now->copy()->subDay();
-                return [$y->copy()->startOfDay(), $y->copy()->endOfDay()];
-            case 'last7days':
-                return [$now->copy()->subDays(6)->startOfDay(), $now->copy()->endOfDay()];
-            case 'week':
-                return [$now->copy()->startOfWeek(), $now->copy()->endOfWeek()];
-            case 'lastmonth':
-                return [$now->copy()->subMonthNoOverflow()->startOfMonth(), $now->copy()->subMonthNoOverflow()->endOfMonth()];
-            case 'custom':
-                return [
-                    $from ? Carbon::parse($from)->startOfDay() : $now->copy()->startOfMonth(),
-                    $to   ? Carbon::parse($to)->endOfDay()     : $now->copy()->endOfDay(),
-                ];
-            case 'thismonth':
-            default:
-                return [$now->copy()->startOfMonth(), $now->copy()->endOfMonth()];
-        }
+        return match ($period) {
+            'today'     => [$now->copy()->startOfDay(), $now->copy()->endOfDay()],
+            'yesterday' => [$now->copy()->subDay()->startOfDay(), $now->copy()->subDay()->endOfDay()],
+            'last7days' => [$now->copy()->subDays(6)->startOfDay(), $now->copy()->endOfDay()],
+            'week'      => [$now->copy()->startOfWeek(), $now->copy()->endOfWeek()],
+            'lastmonth' => [
+                $now->copy()->subMonthNoOverflow()->startOfMonth(),
+                $now->copy()->subMonthNoOverflow()->endOfMonth(),
+            ],
+            'custom'    => [
+                $from ? Carbon::parse($from)->startOfDay() : $now->copy()->startOfMonth(),
+                $to   ? Carbon::parse($to)->endOfDay()     : $now->copy()->endOfDay(),
+            ],
+            default     => [$now->copy()->startOfMonth(), $now->copy()->endOfMonth()],
+        };
     }
 }
