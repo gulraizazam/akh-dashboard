@@ -162,10 +162,15 @@
     const palette = ['#6366f1','#14b8a6','#06b6d4','#f59e0b','#f43f5e','#64748b','#8b5cf6','#f97316','#10b981','#ec4899','#0ea5e9','#22c55e'];
 
     const charts = {};
+    // Prefix the brand only when the view spans more than one, so a
+    // single-brand view reads "Alkhaleej DHA Karachi" not
+    // "Alkhaleej Hair Transplant · Alkhaleej DHA Karachi".
     function sumByKey(rows, keyField, valueField) {
         const map = {};
-        (rows || []).forEach(r => {
-            const label = (r['brand'] ? r['brand'] + ' · ' : '') + (r[keyField] || 'Unknown');
+        rows = rows || [];
+        const multiBrand = new Set(rows.map(r => r.brand)).size > 1;
+        rows.forEach(r => {
+            const label = (multiBrand && r.brand ? r.brand + ' · ' : '') + (r[keyField] || 'Unknown');
             map[label] = (map[label] || 0) + Number(r[valueField] || 0);
         });
         return map;
