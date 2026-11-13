@@ -194,12 +194,21 @@ class BrandStatsService
     /**
      * A day with no collection must plot as zero, not vanish — otherwise the
      * line implies activity on dates that had none.
+     *
+     * The series stops at today: "this month" runs to the 30th, but plotting
+     * dates that haven't happened yet draws a cliff to zero that reads as a
+     * collapse in takings rather than as the month simply not being over.
      */
     protected function fillTrendGaps(array $trend, string $from, string $to): array
     {
         $out    = [];
         $cursor = \Carbon\Carbon::parse($from)->startOfDay();
         $end    = \Carbon\Carbon::parse($to)->startOfDay();
+        $today  = \Carbon\Carbon::now()->startOfDay();
+
+        if ($end->greaterThan($today)) {
+            $end = $today;
+        }
 
         // Guard against an inverted or absurd range producing a runaway loop.
         if ($cursor->greaterThan($end) || $cursor->diffInDays($end) > 400) {
