@@ -193,7 +193,9 @@
                             </tr>
                         </thead>
                         <tbody id="doctorTableBody"></tbody>
-                        <tfoot class="table-light fw-semibold">
+                        {{-- Pinned: with 27 doctors the totals would otherwise
+                             sit below the scroll. --}}
+                        <tfoot class="table-light fw-semibold" style="position:sticky; bottom:0; z-index:1;">
                             <tr id="doctorTableTotals"></tr>
                         </tfoot>
                     </table>
