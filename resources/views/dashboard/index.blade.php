@@ -169,18 +169,43 @@
     </div>
 </div>
 
-{{-- ---------- Conversion + category mix ---------- --}}
+{{-- ---------- Doctor conversion: chart, then the numbers behind it ---------- --}}
 <div class="row g-4 mb-4">
-    <div class="col-xl-6">
-        <div class="card h-100">
+    <div class="col-12">
+        <div class="card">
             <div class="card-header pb-0">
                 <h5 class="card-title mb-0">Doctor-wise Conversion</h5>
                 <small class="text-muted">Arrived consultations and how many paid</small>
             </div>
-            <div class="card-body pt-3"><div id="chartDoctorConversion"></div></div>
+            <div class="card-body pt-3">
+                <div id="chartDoctorConversion"></div>
+
+                <div class="table-responsive mt-4" style="max-height:360px; overflow-y:auto;">
+                    <table class="table table-sm table-hover mb-0 align-middle" id="doctorTable">
+                        <thead class="table-light" style="position:sticky; top:0; z-index:1;">
+                            <tr>
+                                <th>Doctor</th>
+                                <th class="text-end">Booked</th>
+                                <th class="text-end">Arrived</th>
+                                <th class="text-end">Converted</th>
+                                <th class="text-end">Conversion Rate</th>
+                                <th class="text-end">Revenue (PKR)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="doctorTableBody"></tbody>
+                        <tfoot class="table-light fw-semibold">
+                            <tr id="doctorTableTotals"></tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
-    <div class="col-xl-6">
+</div>
+
+{{-- ---------- Category mix ---------- --}}
+<div class="row g-4 mb-4">
+    <div class="col-xl-5">
         <div class="card h-100">
             <div class="card-header pb-0">
                 <h5 class="card-title mb-0">Collection by Service Category</h5>
@@ -189,12 +214,8 @@
             <div class="card-body pt-3"><div id="chartCollectionCategory"></div></div>
         </div>
     </div>
-</div>
-
-{{-- ---------- Consumed categories ---------- --}}
-<div class="row g-4 mb-4">
-    <div class="col-12">
-        <div class="card">
+    <div class="col-xl-7">
+        <div class="card h-100">
             <div class="card-header pb-0">
                 <h5 class="card-title mb-0">Consumed by Service Category</h5>
                 <small class="text-muted">Top 10 categories</small>
@@ -616,7 +637,7 @@
                 label: labelFor(rows, r, 'name'),
                 rate:  r.arrived ? (r.converted / r.arrived) * 100 : 0,
             }))
-            .sort((a, b) => b.arrived - a.arrived)
+            .sort((a, b) => b.booked - a.booked)
             .slice(0, 12);
 
         mount('chartDoctorConversion', {
@@ -649,12 +670,60 @@
                     formatter: function (val, opts) {
                         const r = rows[opts.dataPointIndex] || {};
                         return fmtCount(r.converted) + ' of ' + fmtCount(r.arrived) +
-                               ' arrived converted · ' + fmtFull(r.amount);
+                               ' arrived (' + fmtCount(r.booked) + ' booked) · ' + fmtFull(r.amount);
                     },
                     title: { formatter: () => '' },
                 },
             },
         }, rows.length > 0);
+    }
+
+    // The figures behind the chart. The chart drops doctors under five
+    // arrivals to stay readable; the table carries everyone, which is the
+    // point of having both.
+    function renderDoctorTable(rows) {
+        const body   = document.getElementById('doctorTableBody');
+        const totals = document.getElementById('doctorTableTotals');
+        if (!body) return;
+
+        rows = (rows || [])
+            .map(r => Object.assign({}, r, {
+                label: labelFor(rows, r, 'name'),
+                rate:  r.arrived ? (r.converted / r.arrived) * 100 : 0,
+            }))
+            .sort((a, b) => b.booked - a.booked);
+
+        if (!rows.length) {
+            body.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No consultations in this selection</td></tr>';
+            totals.innerHTML = '';
+            return;
+        }
+
+        body.innerHTML = rows.map(r => `
+            <tr>
+                <td>${esc(r.label)}</td>
+                <td class="text-end">${fmtCount(r.booked)}</td>
+                <td class="text-end">${fmtCount(r.arrived)}</td>
+                <td class="text-end">${fmtCount(r.converted)}</td>
+                <td class="text-end">${r.arrived ? fmtPct(r.rate) : '—'}</td>
+                <td class="text-end">${fmtAmount(r.amount)}</td>
+            </tr>`).join('');
+
+        const sum = f => rows.reduce((s, r) => s + (Number(r[f]) || 0), 0);
+        const tb = sum('booked'), ta = sum('arrived'), tc = sum('converted'), tv = sum('amount');
+        totals.innerHTML = `
+            <td>Total &mdash; ${rows.length} doctor${rows.length === 1 ? '' : 's'}</td>
+            <td class="text-end">${fmtCount(tb)}</td>
+            <td class="text-end">${fmtCount(ta)}</td>
+            <td class="text-end">${fmtCount(tc)}</td>
+            <td class="text-end">${ta ? fmtPct((tc / ta) * 100) : '—'}</td>
+            <td class="text-end">${fmtAmount(tv)}</td>`;
+    }
+
+    function esc(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        }[c]));
     }
 
     function renderAll(d) {
@@ -664,10 +733,11 @@
         renderBrandCompare(d.brand_breakdown);
         renderBranchArrivals(d.branch_arrivals);
         renderDoctorConversion(d.doctor_conversion);
+        renderDoctorTable(d.doctor_conversion);
         renderCategoryTreemap(d.collection_by_category);
         //                                                                cap  label width
         hBar('chartCollectionBranch', mergeBranches(d.collection_by_branch),    C.collection, 14, 230);
-        hBar('chartConsumedCategory', merge(d.consumed_by_category, 'category'), C.consumed,  10, 300);
+        hBar('chartConsumedCategory', merge(d.consumed_by_category, 'category'), C.consumed,  10, 220);
         hBar('chartConsumedService',  merge(d.consumed_by_service,  'service'),  C.consumed,  12, 300);
     }
 

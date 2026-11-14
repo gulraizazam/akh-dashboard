@@ -467,8 +467,8 @@ class BrandStatsService
     }
 
     /**
-     * Per doctor: arrived consultations, how many turned into a payment, and
-     * what those payments were worth.
+     * Per doctor: consultations booked, how many arrived, how many of those
+     * turned into a payment, and what those payments were worth.
      *
      * "Converted" means an arrived consultation with at least one cash-in
      * advance recorded against it inside the period — the same test the brand
@@ -477,11 +477,19 @@ class BrandStatsService
     public function doctorConversion(string $key, string $from, string $to, ?int $locationId): array
     {
         return $this->guard($key, function () use ($key, $from, $to, $locationId) {
+            // Arrival is a condition on the aggregates rather than the WHERE
+            // clause, so booked (every consultation scheduled with the doctor)
+            // and arrived come back from one pass. The advance join can fan a
+            // row out per payment, which is why the counts are DISTINCT; the
+            // cash SUM wants every one of those rows.
+            $arrived = config('brands.appointment_status_arrived');
+
             $rows = $this->connection($key)->select(
                 "SELECT u.name AS name,
-                        COUNT(DISTINCT a.id)              AS arrived,
-                        COUNT(DISTINCT pa.appointment_id) AS converted,
-                        COALESCE(SUM(pa.cash_amount), 0)  AS amount
+                        COUNT(DISTINCT a.id) AS booked,
+                        COUNT(DISTINCT CASE WHEN a.appointment_status_id = ? THEN a.id END)              AS arrived,
+                        COUNT(DISTINCT CASE WHEN a.appointment_status_id = ? THEN pa.appointment_id END) AS converted,
+                        COALESCE(SUM(CASE WHEN a.appointment_status_id = ? THEN pa.cash_amount END), 0)  AS amount
                    FROM appointments a
                    JOIN users u ON u.id = a.doctor_id
                    LEFT JOIN package_advances pa
@@ -490,18 +498,17 @@ class BrandStatsService
                          AND pa.cash_amount > 0
                          AND pa.is_adjustment = 0 AND pa.is_tax = 0 AND pa.is_cancel = 0
                          AND DATE(pa.created_at) BETWEEN ? AND ?
-                  WHERE a.appointment_status_id = ?
-                    AND a.appointment_type_id = ?
+                  WHERE a.appointment_type_id = ?
                     AND DATE(a.scheduled_date) BETWEEN ? AND ?"
                     . ($locationId ? ' AND a.location_id = ?' : '') .
                 ' GROUP BY u.id, u.name
-                  HAVING arrived > 0
-                  ORDER BY arrived DESC
+                  HAVING booked > 0
+                  ORDER BY booked DESC
                   LIMIT ' . self::TOP_N,
                 array_merge(
                     [
+                        $arrived, $arrived, $arrived,
                         $from, $to,
-                        config('brands.appointment_status_arrived'),
                         config('brands.appointment_type_consult'),
                         $from, $to,
                     ],
@@ -511,6 +518,7 @@ class BrandStatsService
 
             return array_map(fn($r) => [
                 'name'      => $r->name ?: 'Unknown',
+                'booked'    => (int) $r->booked,
                 'arrived'   => (int) $r->arrived,
                 'converted' => (int) $r->converted,
                 'amount'    => (float) $r->amount,
