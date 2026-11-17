@@ -900,7 +900,7 @@
 
         // The BOM tells Excel the file is UTF-8; without it, names outside
         // plain ASCII come out garbled.
-        const blob = new Blob(['﻿' + lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+        const blob = new Blob([String.fromCharCode(0xFEFF) + lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href = url;
