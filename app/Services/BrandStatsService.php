@@ -555,20 +555,29 @@ class BrandStatsService
                 )
             );
 
+            // Invoices raised on consultations belong to the consultant. Kept
+            // apart from revenue, which stays the Conversion Report's figure.
+            $fees = $this->invoicedByDoctor($db, $consult, $from, $to, $locationId);
+
+            $blank = fn($r) => [
+                'name' => $r->name ?: 'Unknown', 'booked' => 0, 'arrived' => 0,
+                'converted' => 0, 'revenue' => 0.0, 'fees' => 0.0,
+            ];
+
             $rows = [];
             foreach ($volume as $r) {
-                $rows[$r->id] = [
-                    'name' => $r->name ?: 'Unknown', 'booked' => (int) $r->booked,
-                    'arrived' => (int) $r->arrived, 'converted' => 0, 'revenue' => 0.0,
-                ];
+                $rows[$r->id] = $blank($r);
+                $rows[$r->id]['booked']  = (int) $r->booked;
+                $rows[$r->id]['arrived'] = (int) $r->arrived;
             }
             foreach ($conversions as $r) {
-                $rows[$r->id] ??= [
-                    'name' => $r->name ?: 'Unknown', 'booked' => 0,
-                    'arrived' => 0, 'converted' => 0, 'revenue' => 0.0,
-                ];
+                $rows[$r->id] ??= $blank($r);
                 $rows[$r->id]['converted'] = (int) $r->converted;
                 $rows[$r->id]['revenue']   = (float) $r->revenue;
+            }
+            foreach ($fees as $r) {
+                $rows[$r->id] ??= $blank($r);
+                $rows[$r->id]['fees'] = (float) $r->revenue;
             }
 
             return array_values($rows);
@@ -581,12 +590,10 @@ class BrandStatsService
      * (Invoices::getDailyEmployeeStats): invoices.doctor_id, summed over
      * invoice_details.tax_including_price, dated by the invoice.
      *
-     * Invoices on consultation appointments are left out — this section is
-     * treatments. They are not small everywhere: in November they were
-     * 341k at Skin, 233k at Ortho and all 88k of Smile's consumed. They are
-     * the whole difference between this section's total and the Consumed
-     * card (verified: no paid invoice lacks an appointment, and no other
-     * appointment type is invoiced).
+     * Invoices on consultation appointments belong to the consultant and are
+     * reported there as consultation fees. Between the two sections every
+     * paid invoice is accounted for: none lacks an appointment and no other
+     * appointment type is invoiced.
      */
     public function treatmentDoctorPerformance(string $key, string $from, string $to, ?int $locationId): array
     {
@@ -609,25 +616,7 @@ class BrandStatsService
                 array_merge([$arrived, $service, $from, $to], $locationId ? [$locationId] : [])
             );
 
-            $billed = $db->select(
-                'SELECT i.doctor_id AS id, u.name AS name,
-                        COUNT(DISTINCT i.id)       AS invoices,
-                        SUM(d.tax_including_price) AS revenue
-                   FROM invoices i
-                   JOIN appointments a    ON a.id = i.appointment_id
-                   JOIN invoice_details d ON d.invoice_id = i.id
-                   LEFT JOIN users u      ON u.id = i.doctor_id
-                  WHERE i.invoice_status_id = ?
-                    AND a.appointment_type_id = ?
-                    AND i.deleted_at IS NULL AND d.deleted_at IS NULL AND a.deleted_at IS NULL
-                    AND DATE(i.created_at) BETWEEN ? AND ?'
-                    . ($locationId ? ' AND a.location_id = ?' : '') .
-                ' GROUP BY i.doctor_id, u.name',
-                array_merge(
-                    [config('brands.invoice_status_paid'), $service, $from, $to],
-                    $locationId ? [$locationId] : []
-                )
-            );
+            $billed = $this->invoicedByDoctor($db, $service, $from, $to, $locationId);
 
             $rows = [];
             foreach ($volume as $r) {
@@ -647,6 +636,35 @@ class BrandStatsService
 
             return array_values($rows);
         }, []);
+    }
+
+    /**
+     * Paid invoices on one appointment type, by the doctor on the invoice,
+     * summed over invoice_details.tax_including_price — the definition of
+     * Invoices::getDailyEmployeeStats. Treatments feed the Treatment Doctors
+     * section; consultations feed the consultants' fee column.
+     */
+    protected function invoicedByDoctor(Connection $db, int $type, string $from, string $to, ?int $locationId): array
+    {
+        return $db->select(
+            'SELECT i.doctor_id AS id, u.name AS name,
+                    COUNT(DISTINCT i.id)       AS invoices,
+                    SUM(d.tax_including_price) AS revenue
+               FROM invoices i
+               JOIN appointments a    ON a.id = i.appointment_id
+               JOIN invoice_details d ON d.invoice_id = i.id
+               LEFT JOIN users u      ON u.id = i.doctor_id
+              WHERE i.invoice_status_id = ?
+                AND a.appointment_type_id = ?
+                AND i.deleted_at IS NULL AND d.deleted_at IS NULL AND a.deleted_at IS NULL
+                AND DATE(i.created_at) BETWEEN ? AND ?'
+                . ($locationId ? ' AND a.location_id = ?' : '') .
+            ' GROUP BY i.doctor_id, u.name',
+            array_merge(
+                [config('brands.invoice_status_paid'), $type, $from, $to],
+                $locationId ? [$locationId] : []
+            )
+        );
     }
 
     // ----------------------------------------------------------- totals SQL

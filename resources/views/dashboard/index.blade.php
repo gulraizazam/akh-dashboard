@@ -191,7 +191,8 @@
                                 <th class="text-end">Arrived</th>
                                 <th class="text-end">Converted</th>
                                 <th class="text-end">Conversion Rate</th>
-                                <th class="text-end">Revenue (PKR)</th>
+                                <th class="text-end">Conversion Revenue (PKR)</th>
+                                <th class="text-end">Consultation Fees (PKR)</th>
                             </tr>
                         </thead>
                         <tbody id="consultantBody"></tbody>
@@ -203,7 +204,8 @@
                 <p class="text-muted small mt-3 mb-0">
                     Converted counts consultations whose first payment fell in the period, including
                     ones booked earlier &mdash; so a consultant's conversions can exceed their arrivals.
-                    Revenue is everything paid against those consultations.
+                    Conversion Revenue is everything paid against those consultations, as in the
+                    Conversion Report. Consultation Fees are paid invoices raised on consultations.
                 </p>
             </div>
         </div>
@@ -240,8 +242,8 @@
                 </div>
                 <p class="text-muted small mt-3 mb-0">
                     Revenue is paid invoices on treatment appointments, by the doctor on the invoice.
-                    Invoices raised on consultations are not included here, which is why this total
-                    sits below the Consumed card.
+                    Invoices on consultations are under Consultants as Consultation Fees &mdash; the two
+                    together make up the Consumed card.
                 </p>
             </div>
         </div>
@@ -732,7 +734,7 @@
 
     function renderConsultantTable(rows) {
         rows = prepDoctors(rows);
-        fillTable('consultantBody', 'consultantTotals', rows, 6,
+        fillTable('consultantBody', 'consultantTotals', rows, 7,
             'No consultations in this selection',
             r => `
                 <td>${esc(r.label)}</td>
@@ -740,14 +742,16 @@
                 <td class="text-end">${fmtCount(r.arrived)}</td>
                 <td class="text-end">${fmtCount(r.converted)}</td>
                 <td class="text-end">${r.rate === null ? '—' : fmtPct(r.rate)}</td>
-                <td class="text-end">${fmtAmount(r.revenue)}</td>`,
+                <td class="text-end">${fmtAmount(r.revenue)}</td>
+                <td class="text-end">${fmtAmount(r.fees)}</td>`,
             t => `
                 <td>Total &mdash; ${t.n} consultant${t.n === 1 ? '' : 's'}</td>
                 <td class="text-end">${fmtCount(t.booked)}</td>
                 <td class="text-end">${fmtCount(t.arrived)}</td>
                 <td class="text-end">${fmtCount(t.converted)}</td>
                 <td class="text-end">${t.arrived ? fmtPct((t.converted / t.arrived) * 100) : '—'}</td>
-                <td class="text-end">${fmtAmount(t.revenue)}</td>`);
+                <td class="text-end">${fmtAmount(t.revenue)}</td>
+                <td class="text-end">${fmtAmount(t.fees)}</td>`);
     }
 
     // Treatment doctors by revenue — same horizontal bar as the other money
@@ -792,7 +796,7 @@
         body.innerHTML = rows.map(r => '<tr>' + rowTpl(r) + '</tr>').join('');
 
         const t = { n: rows.length };
-        ['booked', 'arrived', 'converted', 'invoices', 'revenue'].forEach(f => {
+        ['booked', 'arrived', 'converted', 'invoices', 'revenue', 'fees'].forEach(f => {
             t[f] = rows.reduce((s, r) => s + (Number(r[f]) || 0), 0);
         });
         foot.innerHTML = footTpl(t);
