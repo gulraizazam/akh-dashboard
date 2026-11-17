@@ -240,6 +240,8 @@
                 </div>
                 <p class="text-muted small mt-3 mb-0">
                     Revenue is paid invoices on treatment appointments, by the doctor on the invoice.
+                    Invoices raised on consultations are not included here, which is why this total
+                    sits below the Consumed card.
                 </p>
             </div>
         </div>

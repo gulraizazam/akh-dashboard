@@ -581,8 +581,12 @@ class BrandStatsService
      * (Invoices::getDailyEmployeeStats): invoices.doctor_id, summed over
      * invoice_details.tax_including_price, dated by the invoice.
      *
-     * Consultation invoices are left out: across the brands they are almost
-     * all zero-value fee lines, and those doctors already have a section.
+     * Invoices on consultation appointments are left out — this section is
+     * treatments. They are not small everywhere: in November they were
+     * 341k at Skin, 233k at Ortho and all 88k of Smile's consumed. They are
+     * the whole difference between this section's total and the Consumed
+     * card (verified: no paid invoice lacks an appointment, and no other
+     * appointment type is invoiced).
      */
     public function treatmentDoctorPerformance(string $key, string $from, string $to, ?int $locationId): array
     {
