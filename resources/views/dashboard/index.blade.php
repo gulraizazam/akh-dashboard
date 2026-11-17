@@ -173,9 +173,14 @@
 <div class="row g-4 mb-4">
     <div class="col-12">
         <div class="card">
-            <div class="card-header pb-0">
-                <h5 class="card-title mb-0">Consultants</h5>
-                <small class="text-muted">Consultation conversion &mdash; same figures as the Conversion Report</small>
+            <div class="card-header pb-0 d-flex justify-content-between align-items-start gap-2">
+                <div>
+                    <h5 class="card-title mb-0">Consultants</h5>
+                    <small class="text-muted">Consultation conversion &mdash; same figures as the Conversion Report</small>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-primary text-nowrap" data-export="consultants" disabled>
+                    <i class="bx bx-download me-1"></i> Export
+                </button>
             </div>
             <div class="card-body pt-3">
                 <div id="chartConsultants"></div>
@@ -216,9 +221,14 @@
 <div class="row g-4 mb-4">
     <div class="col-12">
         <div class="card">
-            <div class="card-header pb-0">
-                <h5 class="card-title mb-0">Treatment Doctors</h5>
-                <small class="text-muted">Treatments performed and invoiced</small>
+            <div class="card-header pb-0 d-flex justify-content-between align-items-start gap-2">
+                <div>
+                    <h5 class="card-title mb-0">Treatment Doctors</h5>
+                    <small class="text-muted">Treatments performed and invoiced</small>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-primary text-nowrap" data-export="treatment" disabled>
+                    <i class="bx bx-download me-1"></i> Export
+                </button>
             </div>
             <div class="card-body pt-3">
                 <div id="chartTreatmentDoctors"></div>
@@ -297,6 +307,8 @@
         locations: @json(route('dashboard.locations')),
     };
     let payload = @json($data);
+    // The filters behind what's on screen, so an export is named for them.
+    let currentFilters = @json($filters);
 
     const C = {
         collection: '#2a78d6',
@@ -734,6 +746,7 @@
 
     function renderConsultantTable(rows) {
         rows = prepDoctors(rows);
+        holdForExport('consultants', rows);
         fillTable('consultantBody', 'consultantTotals', rows, 7,
             'No consultations in this selection',
             r => `
@@ -764,6 +777,7 @@
 
     function renderTreatmentTable(rows) {
         rows = prepDoctors(rows);
+        holdForExport('treatment', rows);
         fillTable('treatmentBody', 'treatmentTotals', rows, 5,
             'No treatments in this selection',
             r => `
@@ -807,6 +821,99 @@
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
         }[c]));
     }
+
+    // ---- export ------------------------------------------------------------
+
+    // CSV opens straight into Excel. Each export is exactly the table on
+    // screen — same filters, same rows, same totals — plus a Brand column,
+    // which the screen only shows where two brands share a doctor's name but
+    // a spreadsheet wants on every row to sort and filter by.
+    //
+    // Numbers go out raw (no separators, no "PKR") so Excel treats them as
+    // numbers and can sum them.
+    const money = v => Math.round((Number(v) || 0) * 100) / 100;
+    const rate1 = (c, a) => a ? Math.round((c / a) * 1000) / 10 : '';
+
+    const EXPORTS = {
+        consultants: {
+            name: 'consultants',
+            head: ['Brand', 'Consultant', 'Booked', 'Arrived', 'Converted', 'Conversion Rate (%)',
+                   'Conversion Revenue (PKR)', 'Consultation Fees (PKR)'],
+            row:  r => [r.brand, r.name, r.booked, r.arrived, r.converted,
+                        r.rate === null ? '' : Math.round(r.rate * 10) / 10, money(r.revenue), money(r.fees)],
+            total: t => ['', 'Total', t.booked, t.arrived, t.converted,
+                         rate1(t.converted, t.arrived), money(t.revenue), money(t.fees)],
+        },
+        treatment: {
+            name: 'treatment-doctors',
+            head: ['Brand', 'Doctor', 'Booked', 'Arrived', 'Invoices', 'Revenue (PKR)'],
+            row:  r => [r.brand, r.name, r.booked, r.arrived, r.invoices, money(r.revenue)],
+            total: t => ['', 'Total', t.booked, t.arrived, t.invoices, money(t.revenue)],
+        },
+    };
+    const exportRows = {};
+
+    function holdForExport(key, rows) {
+        exportRows[key] = rows;
+        const btn = document.querySelector(`[data-export="${key}"]`);
+        if (btn) btn.disabled = !rows.length;
+    }
+
+    // Quote what needs quoting, and defuse cells Excel would run as a formula
+    // (a name starting with = + - @ is data here, never an instruction).
+    function csvCell(v) {
+        if (typeof v === 'number') return String(v);
+        let s = String(v ?? '');
+        if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+        return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    function slug(s) {
+        return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    }
+
+    // Name the file for the selection it holds, e.g.
+    // consultants_hair_alkhaleej-dha-karachi_2026-11-01_to_2026-11-30.csv
+    function exportFilename(base) {
+        const f = currentFilters || {};
+        const parts = [base, f.brand ? slug(f.brand) : 'all-brands'];
+        if (f.brand && f.location) {
+            const opt = document.querySelector(`#filterLocation option[value="${CSS.escape(String(f.location))}"]`);
+            parts.push(opt ? slug(opt.textContent) : 'branch-' + slug(f.location));
+        }
+        parts.push(f.from + '_to_' + f.to);
+        return parts.join('_') + '.csv';
+    }
+
+    function downloadExport(key) {
+        const def  = EXPORTS[key];
+        const rows = exportRows[key] || [];
+        if (!def || !rows.length) return;
+
+        const t = { n: rows.length };
+        ['booked', 'arrived', 'converted', 'invoices', 'revenue', 'fees'].forEach(f => {
+            t[f] = rows.reduce((s, r) => s + (Number(r[f]) || 0), 0);
+        });
+
+        const lines = [def.head, ...rows.map(def.row), def.total(t)]
+            .map(cells => cells.map(csvCell).join(','));
+
+        // The BOM tells Excel the file is UTF-8; without it, names outside
+        // plain ASCII come out garbled.
+        const blob = new Blob(['﻿' + lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url;
+        a.download = exportFilename(def.name);
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    document.querySelectorAll('[data-export]').forEach(btn => {
+        btn.addEventListener('click', () => downloadExport(btn.dataset.export));
+    });
 
     function renderAll(d) {
         const unitEl = document.getElementById('trendUnitLabel');
@@ -879,6 +986,7 @@
                                      { headers: { Accept: 'application/json' } });
             const json = await res.json();
             payload = json.data;
+            currentFilters = json.filters || currentFilters;
 
             const t = payload.totals || {};
             const num = v => Math.round(Number(v) || 0).toLocaleString();
