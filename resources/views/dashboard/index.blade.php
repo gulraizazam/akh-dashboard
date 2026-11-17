@@ -169,22 +169,24 @@
     </div>
 </div>
 
-{{-- ---------- Doctor conversion: chart, then the numbers behind it ---------- --}}
+{{-- ---------- Consultants: figures follow the brand apps' Conversion Report ---------- --}}
 <div class="row g-4 mb-4">
     <div class="col-12">
         <div class="card">
             <div class="card-header pb-0">
-                <h5 class="card-title mb-0">Doctor-wise Conversion</h5>
-                <small class="text-muted">Arrived consultations and how many paid</small>
+                <h5 class="card-title mb-0">Consultants</h5>
+                <small class="text-muted">Consultation conversion &mdash; same figures as the Conversion Report</small>
             </div>
             <div class="card-body pt-3">
-                <div id="chartDoctorConversion"></div>
+                <div id="chartConsultants"></div>
 
-                <div class="table-responsive mt-4" style="max-height:360px; overflow-y:auto;">
-                    <table class="table table-sm table-hover mb-0 align-middle" id="doctorTable">
+                {{-- Header and totals are pinned: with ~30 doctors both would
+                     otherwise scroll out of view. --}}
+                <div class="table-responsive mt-4" style="max-height:380px; overflow-y:auto;">
+                    <table class="table table-sm table-hover mb-0 align-middle">
                         <thead class="table-light" style="position:sticky; top:0; z-index:1;">
                             <tr>
-                                <th>Doctor</th>
+                                <th>Consultant</th>
                                 <th class="text-end">Booked</th>
                                 <th class="text-end">Arrived</th>
                                 <th class="text-end">Converted</th>
@@ -192,14 +194,53 @@
                                 <th class="text-end">Revenue (PKR)</th>
                             </tr>
                         </thead>
-                        <tbody id="doctorTableBody"></tbody>
-                        {{-- Pinned: with 27 doctors the totals would otherwise
-                             sit below the scroll. --}}
+                        <tbody id="consultantBody"></tbody>
                         <tfoot class="table-light fw-semibold" style="position:sticky; bottom:0; z-index:1;">
-                            <tr id="doctorTableTotals"></tr>
+                            <tr id="consultantTotals"></tr>
                         </tfoot>
                     </table>
                 </div>
+                <p class="text-muted small mt-3 mb-0">
+                    Converted counts consultations whose first payment fell in the period, including
+                    ones booked earlier &mdash; so a consultant's conversions can exceed their arrivals.
+                    Revenue is everything paid against those consultations.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{-- ---------- Treatment doctors: from paid invoices ---------- --}}
+<div class="row g-4 mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header pb-0">
+                <h5 class="card-title mb-0">Treatment Doctors</h5>
+                <small class="text-muted">Treatments performed and invoiced</small>
+            </div>
+            <div class="card-body pt-3">
+                <div id="chartTreatmentDoctors"></div>
+
+                <div class="table-responsive mt-4" style="max-height:380px; overflow-y:auto;">
+                    <table class="table table-sm table-hover mb-0 align-middle">
+                        <thead class="table-light" style="position:sticky; top:0; z-index:1;">
+                            <tr>
+                                <th>Doctor</th>
+                                <th class="text-end">Booked</th>
+                                <th class="text-end">Arrived</th>
+                                <th class="text-end">Invoices</th>
+                                <th class="text-end">Revenue (PKR)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="treatmentBody"></tbody>
+                        <tfoot class="table-light fw-semibold" style="position:sticky; bottom:0; z-index:1;">
+                            <tr id="treatmentTotals"></tr>
+                        </tfoot>
+                    </table>
+                </div>
+                <p class="text-muted small mt-3 mb-0">
+                    Revenue is paid invoices on treatment appointments, by the doctor on the invoice.
+                </p>
             </div>
         </div>
     </div>
@@ -618,31 +659,38 @@
         }, named.length > 0);
     }
 
-    // Conversion as a rate on a 0–100 axis.
-    //
-    // Counts can't carry this: one doctor sees ~430 arrivals and the rest
-    // under sixty, so plotting volume squashed every other bar to a sliver.
-    // The rate puts them on one comparable scale, and the row order (by
-    // volume) keeps the busiest doctors at the top. The rate rides in the
-    // category label rather than a data label, which had nowhere to sit once
-    // a bar reached 100.
-    //
-    // Doctors under five arrivals are left out: three-for-three is a 100%
-    // that says nothing, and it outranked 26-of-35 when the rate drove the
-    // sort.
-    const DOCTOR_MIN_ARRIVED = 5;
+    // ---- doctors ------------------------------------------------------------
 
-    function renderDoctorConversion(rows) {
-        rows = (rows || [])
-            .filter(r => r.arrived >= DOCTOR_MIN_ARRIVED)
+    // Resolve display labels and the conversion rate once, then rank by
+    // revenue — both sections are about who brings the money in.
+    function prepDoctors(rows) {
+        rows = rows || [];
+        return rows
             .map(r => Object.assign({}, r, {
                 label: labelFor(rows, r, 'name'),
-                rate:  r.arrived ? (r.converted / r.arrived) * 100 : 0,
+                rate:  r.arrived ? ((r.converted || 0) / r.arrived) * 100 : null,
             }))
-            .sort((a, b) => b.booked - a.booked)
-            .slice(0, 12);
+            .sort((a, b) => (b.revenue - a.revenue) || (b.booked - a.booked));
+    }
 
-        mount('chartDoctorConversion', {
+    // Consultant conversion as a rate. Counts can't carry it — one consultant
+    // sees hundreds of arrivals and most see dozens, which squashed every
+    // other bar to a sliver. The rate goes in the row label because a data
+    // label has nowhere to sit at the end of a full-length bar.
+    //
+    // Under five arrivals the rate is noise (three-for-three is "100%"), so
+    // those consultants are left off the chart; the table still has them.
+    //
+    // The axis runs past 100 when it must: the report counts conversions of
+    // consultations booked before the period, so a rate above 100 is real.
+    const CONSULTANT_MIN_ARRIVED = 5;
+
+    function renderConsultantChart(rows) {
+        rows = prepDoctors(rows).filter(r => r.arrived >= CONSULTANT_MIN_ARRIVED).slice(0, 12);
+        const top    = Math.max(100, ...rows.map(r => r.rate || 0));
+        const axisMx = Math.ceil(top / 25) * 25;
+
+        mount('chartConsultants', {
             chart: {
                 type: 'bar',
                 height: Math.max(260, rows.length * 38 + 70),
@@ -650,7 +698,7 @@
                 fontFamily: FONT,
                 parentHeightOffset: 0,
             },
-            series: [{ name: 'Converted', data: rows.map(r => Math.round(r.rate * 10) / 10) }],
+            series: [{ name: 'Conversion', data: rows.map(r => Math.round(r.rate * 10) / 10) }],
             colors: [C.collection],
             plotOptions: {
                 bar: { horizontal: true, borderRadius: 4, borderRadiusApplication: 'end', barHeight: '62%' },
@@ -659,20 +707,20 @@
             grid: { ...baseGrid, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } },
             xaxis: {
                 categories: rows.map(r => r.label + '  ·  ' + fmtPct(r.rate)),
-                min: 0, max: 100, tickAmount: 4,
+                min: 0, max: axisMx, tickAmount: axisMx / 25,
                 labels: { style: baseLabelStyle, formatter: v => Math.round(v) + '%' },
                 axisBorder: { show: false },
                 axisTicks: { show: false },
             },
-            yaxis: { labels: { style: baseLabelStyle, maxWidth: 270 } },
+            yaxis: { labels: { style: baseLabelStyle, maxWidth: 280 } },
             legend: { show: false },
             tooltip: {
                 style: { fontFamily: FONT },
                 y: {
                     formatter: function (val, opts) {
                         const r = rows[opts.dataPointIndex] || {};
-                        return fmtCount(r.converted) + ' of ' + fmtCount(r.arrived) +
-                               ' arrived (' + fmtCount(r.booked) + ' booked) · ' + fmtFull(r.amount);
+                        return fmtCount(r.converted) + ' converted of ' + fmtCount(r.arrived) +
+                               ' arrived (' + fmtCount(r.booked) + ' booked) · ' + fmtFull(r.revenue);
                     },
                     title: { formatter: () => '' },
                 },
@@ -680,46 +728,72 @@
         }, rows.length > 0);
     }
 
-    // The figures behind the chart. The chart drops doctors under five
-    // arrivals to stay readable; the table carries everyone, which is the
-    // point of having both.
-    function renderDoctorTable(rows) {
-        const body   = document.getElementById('doctorTableBody');
-        const totals = document.getElementById('doctorTableTotals');
-        if (!body) return;
-
-        rows = (rows || [])
-            .map(r => Object.assign({}, r, {
-                label: labelFor(rows, r, 'name'),
-                rate:  r.arrived ? (r.converted / r.arrived) * 100 : 0,
-            }))
-            .sort((a, b) => b.booked - a.booked);
-
-        if (!rows.length) {
-            body.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No consultations in this selection</td></tr>';
-            totals.innerHTML = '';
-            return;
-        }
-
-        body.innerHTML = rows.map(r => `
-            <tr>
+    function renderConsultantTable(rows) {
+        rows = prepDoctors(rows);
+        fillTable('consultantBody', 'consultantTotals', rows, 6,
+            'No consultations in this selection',
+            r => `
                 <td>${esc(r.label)}</td>
                 <td class="text-end">${fmtCount(r.booked)}</td>
                 <td class="text-end">${fmtCount(r.arrived)}</td>
                 <td class="text-end">${fmtCount(r.converted)}</td>
-                <td class="text-end">${r.arrived ? fmtPct(r.rate) : '—'}</td>
-                <td class="text-end">${fmtAmount(r.amount)}</td>
-            </tr>`).join('');
+                <td class="text-end">${r.rate === null ? '—' : fmtPct(r.rate)}</td>
+                <td class="text-end">${fmtAmount(r.revenue)}</td>`,
+            t => `
+                <td>Total &mdash; ${t.n} consultant${t.n === 1 ? '' : 's'}</td>
+                <td class="text-end">${fmtCount(t.booked)}</td>
+                <td class="text-end">${fmtCount(t.arrived)}</td>
+                <td class="text-end">${fmtCount(t.converted)}</td>
+                <td class="text-end">${t.arrived ? fmtPct((t.converted / t.arrived) * 100) : '—'}</td>
+                <td class="text-end">${fmtAmount(t.revenue)}</td>`);
+    }
 
-        const sum = f => rows.reduce((s, r) => s + (Number(r[f]) || 0), 0);
-        const tb = sum('booked'), ta = sum('arrived'), tc = sum('converted'), tv = sum('amount');
-        totals.innerHTML = `
-            <td>Total &mdash; ${rows.length} doctor${rows.length === 1 ? '' : 's'}</td>
-            <td class="text-end">${fmtCount(tb)}</td>
-            <td class="text-end">${fmtCount(ta)}</td>
-            <td class="text-end">${fmtCount(tc)}</td>
-            <td class="text-end">${ta ? fmtPct((tc / ta) * 100) : '—'}</td>
-            <td class="text-end">${fmtAmount(tv)}</td>`;
+    // Treatment doctors by revenue — same horizontal bar as the other money
+    // charts, in the consumed hue since this is invoiced value.
+    function renderTreatmentChart(rows) {
+        const map = {};
+        prepDoctors(rows).filter(r => r.revenue > 0).forEach(r => { map[r.label] = r.revenue; });
+        hBar('chartTreatmentDoctors', map, C.consumed, 12, 260);
+    }
+
+    function renderTreatmentTable(rows) {
+        rows = prepDoctors(rows);
+        fillTable('treatmentBody', 'treatmentTotals', rows, 5,
+            'No treatments in this selection',
+            r => `
+                <td>${esc(r.label)}</td>
+                <td class="text-end">${fmtCount(r.booked)}</td>
+                <td class="text-end">${fmtCount(r.arrived)}</td>
+                <td class="text-end">${fmtCount(r.invoices)}</td>
+                <td class="text-end">${fmtAmount(r.revenue)}</td>`,
+            t => `
+                <td>Total &mdash; ${t.n} doctor${t.n === 1 ? '' : 's'}</td>
+                <td class="text-end">${fmtCount(t.booked)}</td>
+                <td class="text-end">${fmtCount(t.arrived)}</td>
+                <td class="text-end">${fmtCount(t.invoices)}</td>
+                <td class="text-end">${fmtAmount(t.revenue)}</td>`);
+    }
+
+    // Shared table filler: one row template, one totals template, summed
+    // over every numeric field the rows carry.
+    function fillTable(bodyId, footId, rows, cols, emptyText, rowTpl, footTpl) {
+        const body = document.getElementById(bodyId);
+        const foot = document.getElementById(footId);
+        if (!body || !foot) return;
+
+        if (!rows.length) {
+            body.innerHTML = `<tr><td colspan="${cols}" class="text-center text-muted py-4">${emptyText}</td></tr>`;
+            foot.innerHTML = '';
+            return;
+        }
+
+        body.innerHTML = rows.map(r => '<tr>' + rowTpl(r) + '</tr>').join('');
+
+        const t = { n: rows.length };
+        ['booked', 'arrived', 'converted', 'invoices', 'revenue'].forEach(f => {
+            t[f] = rows.reduce((s, r) => s + (Number(r[f]) || 0), 0);
+        });
+        foot.innerHTML = footTpl(t);
     }
 
     function esc(s) {
@@ -734,8 +808,10 @@
         renderTrend(d.trend, d.trend_unit);
         renderBrandCompare(d.brand_breakdown);
         renderBranchArrivals(d.branch_arrivals);
-        renderDoctorConversion(d.doctor_conversion);
-        renderDoctorTable(d.doctor_conversion);
+        renderConsultantChart(d.consultants);
+        renderConsultantTable(d.consultants);
+        renderTreatmentChart(d.treatment_doctors);
+        renderTreatmentTable(d.treatment_doctors);
         renderCategoryTreemap(d.collection_by_category);
         //                                                                cap  label width
         hBar('chartCollectionBranch', mergeBranches(d.collection_by_branch),    C.collection, 14, 230);

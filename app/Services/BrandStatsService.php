@@ -138,7 +138,8 @@ class BrandStatsService
         $consumedByCategory   = [];
         $consumedByService    = [];
         $branchArrivals       = [];
-        $doctorConversion     = [];
+        $consultants          = [];
+        $treatmentDoctors     = [];
         $unreachable          = [];
         $trend                = [];
 
@@ -189,8 +190,11 @@ class BrandStatsService
             foreach ($this->branchArrivals($key, $from, $to, $loc) as $r) {
                 $branchArrivals[] = $r + ['brand' => $label];
             }
-            foreach ($this->doctorConversion($key, $from, $to, $loc) as $r) {
-                $doctorConversion[] = $r + ['brand' => $label];
+            foreach ($this->consultantPerformance($key, $from, $to, $loc) as $r) {
+                $consultants[] = $r + ['brand' => $label];
+            }
+            foreach ($this->treatmentDoctorPerformance($key, $from, $to, $loc) as $r) {
+                $treatmentDoctors[] = $r + ['brand' => $label];
             }
 
             foreach ($this->collectionTrend($key, $from, $to, $loc) as $date => $amount) {
@@ -207,7 +211,8 @@ class BrandStatsService
             'consumed_by_category'   => $consumedByCategory,
             'consumed_by_service'    => $consumedByService,
             'branch_arrivals'        => $branchArrivals,
-            'doctor_conversion'      => $doctorConversion,
+            'consultants'            => $consultants,
+            'treatment_doctors'      => $treatmentDoctors,
             'trend'                  => $this->fillTrendGaps($trend, $from, $to),
             'trend_unit'             => $this->trendUnit($from, $to),
             'unreachable'            => $unreachable,
@@ -305,6 +310,7 @@ class BrandStatsService
                JOIN locations l ON l.id = pa.location_id
               WHERE pa.account_id = ? AND pa.is_adjustment = 0 AND pa.is_tax = 0 AND pa.is_cancel = 0
                 AND (pa.cash_flow = 'in' OR (pa.cash_flow = 'out' AND pa.is_refund = 1))
+                AND pa.deleted_at IS NULL
                 AND DATE(pa.created_at) BETWEEN ? AND ?
                 AND l.name NOT IN (" . $this->placeholders($excluded) . ")"
                 . ($locationId ? ' AND pa.location_id = ?' : '') .
@@ -324,6 +330,7 @@ class BrandStatsService
                FROM invoices i
                JOIN locations l ON l.id = i.location_id
               WHERE i.invoice_status_id = ?
+                AND i.deleted_at IS NULL
                 AND DATE(i.created_at) BETWEEN ? AND ?
                 AND l.name NOT IN (' . $this->placeholders($excluded) . ')'
                 . ($locationId ? ' AND i.location_id = ?' : '') .
@@ -345,6 +352,7 @@ class BrandStatsService
                LEFT JOIN services cat ON cat.id = s.parent_id AND s.parent_id <> 0
               WHERE pa.account_id = ? AND pa.is_adjustment = 0 AND pa.is_tax = 0 AND pa.is_cancel = 0
                 AND (pa.cash_flow = 'in' OR (pa.cash_flow = 'out' AND pa.is_refund = 1))
+                AND pa.deleted_at IS NULL AND a.deleted_at IS NULL
                 AND DATE(pa.created_at) BETWEEN ? AND ?"
                 . ($locationId ? ' AND pa.location_id = ?' : '') .
             ' GROUP BY name
@@ -364,6 +372,7 @@ class BrandStatsService
                JOIN services s ON s.id = d.service_id
                LEFT JOIN services cat ON cat.id = s.parent_id AND s.parent_id <> 0
               WHERE i.invoice_status_id = ?
+                AND i.deleted_at IS NULL AND d.deleted_at IS NULL
                 AND DATE(i.created_at) BETWEEN ? AND ?'
                 . ($locationId ? ' AND i.location_id = ?' : '') .
             ' GROUP BY name
@@ -386,6 +395,7 @@ class BrandStatsService
                    FROM package_advances pa
                   WHERE pa.account_id = ? AND pa.is_adjustment = 0 AND pa.is_tax = 0 AND pa.is_cancel = 0
                     AND (pa.cash_flow = 'in' OR (pa.cash_flow = 'out' AND pa.is_refund = 1))
+                    AND pa.deleted_at IS NULL
                     AND DATE(pa.created_at) BETWEEN ? AND ?"
                     . ($locationId ? ' AND pa.location_id = ?' : '') .
                 ' GROUP BY d ORDER BY d',
@@ -409,6 +419,7 @@ class BrandStatsService
                JOIN invoices i ON i.id = d.invoice_id
                JOIN services s ON s.id = d.service_id
               WHERE i.invoice_status_id = ?
+                AND i.deleted_at IS NULL AND d.deleted_at IS NULL
                 AND DATE(i.created_at) BETWEEN ? AND ?'
                 . ($locationId ? ' AND i.location_id = ?' : '') .
             ' GROUP BY s.id, s.name
@@ -435,7 +446,8 @@ class BrandStatsService
                         SUM(a.appointment_type_id = ? AND a.appointment_status_id = ?) AS treat_arrived
                    FROM appointments a
                    JOIN locations l ON l.id = a.location_id
-                  WHERE DATE(a.scheduled_date) BETWEEN ? AND ?
+                  WHERE a.scheduled_date BETWEEN ? AND ?
+                    AND a.deleted_at IS NULL
                     AND l.name NOT IN (' . $this->placeholders($excluded) . ')'
                     . ($locationId ? ' AND a.location_id = ?' : '') .
                 // No ORDER BY: MySQL rejects an aggregate alias used inside an
@@ -467,62 +479,169 @@ class BrandStatsService
     }
 
     /**
-     * Per doctor: consultations booked, how many arrived, how many of those
-     * turned into a payment, and what those payments were worth.
+     * Consultants, measured exactly as the brand apps' Conversion Report
+     * measures them (Finanaces::LoadConversionReport). Verified per doctor
+     * against a line-by-line replica of that report on all six databases.
      *
-     * "Converted" means an arrived consultation with at least one cash-in
-     * advance recorded against it inside the period — the same test the brand
-     * apps' own doctor-conversion report applies, expressed as one query.
+     *  - Booked / arrived: consultations scheduled in the period; arrival is
+     *    base_appointment_status_id, which the report uses.
+     *  - Converted: an arrived consultation by a mapped consultant
+     *    (doctor_has_locations) that has a package and a positive advance,
+     *    and whose FIRST advance (lowest id) falls in the period. The
+     *    appointment itself may have been scheduled before the period — the
+     *    report counts those too ("cross-period" conversions), so converted
+     *    can exceed arrived for a doctor.
+     *  - Revenue: the report's "conversion spend" — every cash-in advance on
+     *    a converted appointment, lifetime, net of tax, adjustment and
+     *    cancellation rows. Refunds are not deducted; the report doesn't.
      */
-    public function doctorConversion(string $key, string $from, string $to, ?int $locationId): array
+    public function consultantPerformance(string $key, string $from, string $to, ?int $locationId): array
     {
         return $this->guard($key, function () use ($key, $from, $to, $locationId) {
-            // Arrival is a condition on the aggregates rather than the WHERE
-            // clause, so booked (every consultation scheduled with the doctor)
-            // and arrived come back from one pass. The advance join can fan a
-            // row out per payment, which is why the counts are DISTINCT; the
-            // cash SUM wants every one of those rows.
+            $db      = $this->connection($key);
+            $consult = config('brands.appointment_type_consult');
             $arrived = config('brands.appointment_status_arrived');
 
-            $rows = $this->connection($key)->select(
-                "SELECT u.name AS name,
-                        COUNT(DISTINCT a.id) AS booked,
-                        COUNT(DISTINCT CASE WHEN a.appointment_status_id = ? THEN a.id END)              AS arrived,
-                        COUNT(DISTINCT CASE WHEN a.appointment_status_id = ? THEN pa.appointment_id END) AS converted,
-                        COALESCE(SUM(CASE WHEN a.appointment_status_id = ? THEN pa.cash_amount END), 0)  AS amount
+            $volume = $db->select(
+                'SELECT a.doctor_id AS id, u.name AS name,
+                        COUNT(*)                              AS booked,
+                        SUM(a.base_appointment_status_id = ?) AS arrived
                    FROM appointments a
-                   JOIN users u ON u.id = a.doctor_id
-                   LEFT JOIN package_advances pa
-                          ON pa.appointment_id = a.id
-                         AND pa.cash_flow = 'in'
-                         AND pa.cash_amount > 0
-                         AND pa.is_adjustment = 0 AND pa.is_tax = 0 AND pa.is_cancel = 0
-                         AND DATE(pa.created_at) BETWEEN ? AND ?
+                   LEFT JOIN users u ON u.id = a.doctor_id
                   WHERE a.appointment_type_id = ?
-                    AND DATE(a.scheduled_date) BETWEEN ? AND ?"
+                    AND a.deleted_at IS NULL
+                    AND a.scheduled_date BETWEEN ? AND ?'
                     . ($locationId ? ' AND a.location_id = ?' : '') .
-                ' GROUP BY u.id, u.name
-                  HAVING booked > 0
-                  ORDER BY booked DESC
-                  LIMIT ' . self::TOP_N,
+                ' GROUP BY a.doctor_id, u.name',
+                array_merge([$arrived, $consult, $from, $to], $locationId ? [$locationId] : [])
+            );
+
+            $conversions = $db->select(
+                "SELECT a.doctor_id AS id, u.name AS name,
+                        COUNT(*)    AS converted,
+                        SUM(rv.rev) AS revenue
+                   FROM appointments a
+                   LEFT JOIN users u ON u.id = a.doctor_id
+                   JOIN (SELECT appointment_id, MIN(id) AS first_id
+                           FROM package_advances
+                          WHERE deleted_at IS NULL AND appointment_id IS NOT NULL
+                          GROUP BY appointment_id) fa ON fa.appointment_id = a.id
+                   JOIN package_advances f ON f.id = fa.first_id
+                   JOIN (SELECT appointment_id, SUM(cash_amount) AS rev
+                           FROM package_advances
+                          WHERE deleted_at IS NULL AND appointment_id IS NOT NULL
+                            AND cash_flow = 'in'
+                            AND is_adjustment = 0 AND is_tax = 0 AND is_cancel = 0
+                            AND cash_amount <> 0
+                          GROUP BY appointment_id) rv ON rv.appointment_id = a.id
+                  WHERE a.base_appointment_status_id = ?
+                    AND a.appointment_type_id = ?
+                    AND a.deleted_at IS NULL
+                    AND a.doctor_id IN (SELECT user_id FROM doctor_has_locations"
+                        . ($locationId ? ' WHERE location_id = ?' : '') . ")
+                    AND DATE(f.created_at) BETWEEN ? AND ?
+                    AND rv.rev > 0
+                    AND EXISTS (SELECT 1 FROM packages p
+                                 WHERE p.appointment_id = a.id AND p.deleted_at IS NULL)
+                    AND EXISTS (SELECT 1 FROM package_advances x
+                                 WHERE x.appointment_id = a.id AND x.cash_amount > 0 AND x.deleted_at IS NULL)"
+                    . ($locationId ? ' AND a.location_id = ?' : '') .
+                ' GROUP BY a.doctor_id, u.name',
                 array_merge(
-                    [
-                        $arrived, $arrived, $arrived,
-                        $from, $to,
-                        config('brands.appointment_type_consult'),
-                        $from, $to,
-                    ],
+                    [$arrived, $consult],
+                    $locationId ? [$locationId] : [],
+                    [$from, $to],
                     $locationId ? [$locationId] : []
                 )
             );
 
-            return array_map(fn($r) => [
-                'name'      => $r->name ?: 'Unknown',
-                'booked'    => (int) $r->booked,
-                'arrived'   => (int) $r->arrived,
-                'converted' => (int) $r->converted,
-                'amount'    => (float) $r->amount,
-            ], $rows);
+            $rows = [];
+            foreach ($volume as $r) {
+                $rows[$r->id] = [
+                    'name' => $r->name ?: 'Unknown', 'booked' => (int) $r->booked,
+                    'arrived' => (int) $r->arrived, 'converted' => 0, 'revenue' => 0.0,
+                ];
+            }
+            foreach ($conversions as $r) {
+                $rows[$r->id] ??= [
+                    'name' => $r->name ?: 'Unknown', 'booked' => 0,
+                    'arrived' => 0, 'converted' => 0, 'revenue' => 0.0,
+                ];
+                $rows[$r->id]['converted'] = (int) $r->converted;
+                $rows[$r->id]['revenue']   = (float) $r->revenue;
+            }
+
+            return array_values($rows);
+        }, []);
+    }
+
+    /**
+     * Treatment doctors, from paid invoices on treatment appointments —
+     * the definition of the brand apps' doctor-wise revenue report
+     * (Invoices::getDailyEmployeeStats): invoices.doctor_id, summed over
+     * invoice_details.tax_including_price, dated by the invoice.
+     *
+     * Consultation invoices are left out: across the brands they are almost
+     * all zero-value fee lines, and those doctors already have a section.
+     */
+    public function treatmentDoctorPerformance(string $key, string $from, string $to, ?int $locationId): array
+    {
+        return $this->guard($key, function () use ($key, $from, $to, $locationId) {
+            $db      = $this->connection($key);
+            $service = config('brands.appointment_type_service');
+            $arrived = config('brands.appointment_status_arrived');
+
+            $volume = $db->select(
+                'SELECT a.doctor_id AS id, u.name AS name,
+                        COUNT(*)                         AS booked,
+                        SUM(a.appointment_status_id = ?) AS arrived
+                   FROM appointments a
+                   LEFT JOIN users u ON u.id = a.doctor_id
+                  WHERE a.appointment_type_id = ?
+                    AND a.deleted_at IS NULL
+                    AND a.scheduled_date BETWEEN ? AND ?'
+                    . ($locationId ? ' AND a.location_id = ?' : '') .
+                ' GROUP BY a.doctor_id, u.name',
+                array_merge([$arrived, $service, $from, $to], $locationId ? [$locationId] : [])
+            );
+
+            $billed = $db->select(
+                'SELECT i.doctor_id AS id, u.name AS name,
+                        COUNT(DISTINCT i.id)       AS invoices,
+                        SUM(d.tax_including_price) AS revenue
+                   FROM invoices i
+                   JOIN appointments a    ON a.id = i.appointment_id
+                   JOIN invoice_details d ON d.invoice_id = i.id
+                   LEFT JOIN users u      ON u.id = i.doctor_id
+                  WHERE i.invoice_status_id = ?
+                    AND a.appointment_type_id = ?
+                    AND i.deleted_at IS NULL AND d.deleted_at IS NULL AND a.deleted_at IS NULL
+                    AND DATE(i.created_at) BETWEEN ? AND ?'
+                    . ($locationId ? ' AND a.location_id = ?' : '') .
+                ' GROUP BY i.doctor_id, u.name',
+                array_merge(
+                    [config('brands.invoice_status_paid'), $service, $from, $to],
+                    $locationId ? [$locationId] : []
+                )
+            );
+
+            $rows = [];
+            foreach ($volume as $r) {
+                $rows[$r->id] = [
+                    'name' => $r->name ?: 'Unknown', 'booked' => (int) $r->booked,
+                    'arrived' => (int) $r->arrived, 'invoices' => 0, 'revenue' => 0.0,
+                ];
+            }
+            foreach ($billed as $r) {
+                $rows[$r->id] ??= [
+                    'name' => $r->name ?: 'Unknown', 'booked' => 0,
+                    'arrived' => 0, 'invoices' => 0, 'revenue' => 0.0,
+                ];
+                $rows[$r->id]['invoices'] = (int) $r->invoices;
+                $rows[$r->id]['revenue']  = (float) $r->revenue;
+            }
+
+            return array_values($rows);
         }, []);
     }
 
@@ -534,6 +653,7 @@ class BrandStatsService
                   FROM package_advances pa
                  WHERE pa.account_id = ? AND pa.is_adjustment = 0 AND pa.is_tax = 0 AND pa.is_cancel = 0
                    AND (pa.cash_flow = 'in' OR (pa.cash_flow = 'out' AND pa.is_refund = 1))
+                   AND pa.deleted_at IS NULL
                    AND DATE(pa.created_at) BETWEEN ? AND ?"
                . ($locationId ? ' AND pa.location_id = ?' : '') . $extra;
     }
@@ -548,6 +668,7 @@ class BrandStatsService
         return 'SELECT COALESCE(SUM(i.total_price), 0) AS v
                   FROM invoices i
                  WHERE i.invoice_status_id = ?
+                   AND i.deleted_at IS NULL
                    AND DATE(i.created_at) BETWEEN ? AND ?'
                . ($locationId ? ' AND i.location_id = ?' : '');
     }
@@ -562,7 +683,8 @@ class BrandStatsService
         return 'SELECT COUNT(*) AS v
                   FROM appointments a
                  WHERE a.appointment_type_id = ?
-                   AND DATE(a.scheduled_date) BETWEEN ? AND ?'
+                   AND a.deleted_at IS NULL
+                   AND a.scheduled_date BETWEEN ? AND ?'
                . ($arrivedOnly ? ' AND a.appointment_status_id = ?' : '')
                . ($locationId ? ' AND a.location_id = ?' : '');
     }
@@ -586,6 +708,7 @@ class BrandStatsService
                   FROM leads l
                   JOIN users u ON u.id = l.patient_id
                  WHERE u.user_type_id = ? AND l.active = 1
+                   AND l.deleted_at IS NULL
                    AND DATE(l.created_at) BETWEEN ? AND ?'
                . ($locationId ? ' AND l.city_id = (SELECT city_id FROM locations WHERE id = ?)' : '');
     }
