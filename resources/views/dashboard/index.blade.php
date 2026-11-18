@@ -176,7 +176,7 @@
             <div class="card-header pb-0 d-flex justify-content-between align-items-start gap-2">
                 <div>
                     <h5 class="card-title mb-0">Consultants</h5>
-                    <small class="text-muted">Consultation conversion &mdash; same figures as the Conversion Report</small>
+                    <small class="text-muted">Conversion as in the Conversion Report &middot; revenue as in the Doctor Wise Revenue report</small>
                 </div>
                 <button type="button" class="btn btn-sm btn-outline-primary text-nowrap" data-export="consultants" disabled>
                     <i class="bx bx-download me-1"></i> Export
@@ -196,8 +196,9 @@
                                 <th class="text-end">Arrived</th>
                                 <th class="text-end">Converted</th>
                                 <th class="text-end">Conversion Rate</th>
-                                <th class="text-end">Conversion Revenue (PKR)</th>
-                                <th class="text-end">Consultation Fees (PKR)</th>
+                                <th class="text-end">Package Payments (PKR)</th>
+                                <th class="text-end">Standalone Payments (PKR)</th>
+                                <th class="text-end">Total Revenue (PKR)</th>
                             </tr>
                         </thead>
                         <tbody id="consultantBody"></tbody>
@@ -209,8 +210,9 @@
                 <p class="text-muted small mt-3 mb-0">
                     Converted counts consultations whose first payment fell in the period, including
                     ones booked earlier &mdash; so a consultant's conversions can exceed their arrivals.
-                    Conversion Revenue is everything paid against those consultations, as in the
-                    Conversion Report. Consultation Fees are paid invoices raised on consultations.
+                    Revenue is every payment received in the period, credited to the doctor of the
+                    appointment it belongs to &mdash; package and standalone &mdash; exactly as the CRM's
+                    Doctor Wise Revenue report shows it.
                 </p>
             </div>
         </div>
@@ -251,9 +253,8 @@
                     </table>
                 </div>
                 <p class="text-muted small mt-3 mb-0">
-                    Revenue is paid invoices on treatment appointments, by the doctor on the invoice.
-                    Invoices on consultations are under Consultants as Consultation Fees &mdash; the two
-                    together make up the Consumed card.
+                    Revenue is paid invoices on treatment appointments, by the doctor on the invoice
+                    &mdash; what was consumed, not what was collected.
                 </p>
             </div>
         </div>
@@ -747,7 +748,7 @@
     function renderConsultantTable(rows) {
         rows = prepDoctors(rows);
         holdForExport('consultants', rows);
-        fillTable('consultantBody', 'consultantTotals', rows, 7,
+        fillTable('consultantBody', 'consultantTotals', rows, 8,
             'No consultations in this selection',
             r => `
                 <td>${esc(r.label)}</td>
@@ -755,16 +756,18 @@
                 <td class="text-end">${fmtCount(r.arrived)}</td>
                 <td class="text-end">${fmtCount(r.converted)}</td>
                 <td class="text-end">${r.rate === null ? '—' : fmtPct(r.rate)}</td>
-                <td class="text-end">${fmtAmount(r.revenue)}</td>
-                <td class="text-end">${fmtAmount(r.fees)}</td>`,
+                <td class="text-end">${fmtAmount(r.package_revenue)}</td>
+                <td class="text-end">${fmtAmount(r.standalone_revenue)}</td>
+                <td class="text-end fw-semibold">${fmtAmount(r.revenue)}</td>`,
             t => `
                 <td>Total &mdash; ${t.n} consultant${t.n === 1 ? '' : 's'}</td>
                 <td class="text-end">${fmtCount(t.booked)}</td>
                 <td class="text-end">${fmtCount(t.arrived)}</td>
                 <td class="text-end">${fmtCount(t.converted)}</td>
                 <td class="text-end">${t.arrived ? fmtPct((t.converted / t.arrived) * 100) : '—'}</td>
-                <td class="text-end">${fmtAmount(t.revenue)}</td>
-                <td class="text-end">${fmtAmount(t.fees)}</td>`);
+                <td class="text-end">${fmtAmount(t.package_revenue)}</td>
+                <td class="text-end">${fmtAmount(t.standalone_revenue)}</td>
+                <td class="text-end">${fmtAmount(t.revenue)}</td>`);
     }
 
     // Treatment doctors by revenue — same horizontal bar as the other money
@@ -808,12 +811,18 @@
         }
 
         body.innerHTML = rows.map(r => '<tr>' + rowTpl(r) + '</tr>').join('');
+        foot.innerHTML = footTpl(sumRows(rows));
+    }
 
+    // Column totals for the doctor tables, shared by the on-screen footer and
+    // the export so the two can't drift apart.
+    const SUMMED = ['booked', 'arrived', 'converted', 'invoices',
+                    'package_revenue', 'standalone_revenue', 'revenue'];
+
+    function sumRows(rows) {
         const t = { n: rows.length };
-        ['booked', 'arrived', 'converted', 'invoices', 'revenue', 'fees'].forEach(f => {
-            t[f] = rows.reduce((s, r) => s + (Number(r[f]) || 0), 0);
-        });
-        foot.innerHTML = footTpl(t);
+        SUMMED.forEach(f => { t[f] = rows.reduce((s, r) => s + (Number(r[f]) || 0), 0); });
+        return t;
     }
 
     function esc(s) {
@@ -838,11 +847,12 @@
         consultants: {
             name: 'consultants',
             head: ['Brand', 'Consultant', 'Booked', 'Arrived', 'Converted', 'Conversion Rate (%)',
-                   'Conversion Revenue (PKR)', 'Consultation Fees (PKR)'],
+                   'Package Payments (PKR)', 'Standalone Payments (PKR)', 'Total Revenue (PKR)'],
             row:  r => [r.brand, r.name, r.booked, r.arrived, r.converted,
-                        r.rate === null ? '' : Math.round(r.rate * 10) / 10, money(r.revenue), money(r.fees)],
-            total: t => ['', 'Total', t.booked, t.arrived, t.converted,
-                         rate1(t.converted, t.arrived), money(t.revenue), money(t.fees)],
+                        r.rate === null ? '' : Math.round(r.rate * 10) / 10,
+                        money(r.package_revenue), money(r.standalone_revenue), money(r.revenue)],
+            total: t => ['', 'Total', t.booked, t.arrived, t.converted, rate1(t.converted, t.arrived),
+                         money(t.package_revenue), money(t.standalone_revenue), money(t.revenue)],
         },
         treatment: {
             name: 'treatment-doctors',
@@ -890,12 +900,7 @@
         const rows = exportRows[key] || [];
         if (!def || !rows.length) return;
 
-        const t = { n: rows.length };
-        ['booked', 'arrived', 'converted', 'invoices', 'revenue', 'fees'].forEach(f => {
-            t[f] = rows.reduce((s, r) => s + (Number(r[f]) || 0), 0);
-        });
-
-        const lines = [def.head, ...rows.map(def.row), def.total(t)]
+        const lines = [def.head, ...rows.map(def.row), def.total(sumRows(rows))]
             .map(cells => cells.map(csvCell).join(','));
 
         // The BOM tells Excel the file is UTF-8; without it, names outside

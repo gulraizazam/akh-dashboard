@@ -479,21 +479,21 @@ class BrandStatsService
     }
 
     /**
-     * Consultants, measured exactly as the brand apps' Conversion Report
-     * measures them (Finanaces::LoadConversionReport). Verified per doctor
-     * against a line-by-line replica of that report on all six databases.
+     * Consultants. Conversion follows the CRMs' Conversion Report
+     * (Finanaces::LoadConversionReport); revenue follows their Doctor Wise
+     * Revenue report (see doctorRevenue()). Both verified per doctor against
+     * line-by-line replicas of those reports on all six databases.
      *
      *  - Booked / arrived: consultations scheduled in the period; arrival is
-     *    base_appointment_status_id, which the report uses.
+     *    base_appointment_status_id, which the Conversion Report uses.
      *  - Converted: an arrived consultation by a mapped consultant
      *    (doctor_has_locations) that has a package and a positive advance,
      *    and whose FIRST advance (lowest id) falls in the period. The
      *    appointment itself may have been scheduled before the period — the
      *    report counts those too ("cross-period" conversions), so converted
      *    can exceed arrived for a doctor.
-     *  - Revenue: the report's "conversion spend" — every cash-in advance on
-     *    a converted appointment, lifetime, net of tax, adjustment and
-     *    cancellation rows. Refunds are not deducted; the report doesn't.
+     *  - Revenue: package + standalone payments, as the Doctor Wise Revenue
+     *    report credits them.
      */
     public function consultantPerformance(string $key, string $from, string $to, ?int $locationId): array
     {
@@ -555,13 +555,11 @@ class BrandStatsService
                 )
             );
 
-            // Invoices raised on consultations belong to the consultant. Kept
-            // apart from revenue, which stays the Conversion Report's figure.
-            $fees = $this->invoicedByDoctor($db, $consult, $from, $to, $locationId);
+            $revenue = $this->doctorRevenue($db, $from, $to, $locationId);
 
             $blank = fn($r) => [
-                'name' => $r->name ?: 'Unknown', 'booked' => 0, 'arrived' => 0,
-                'converted' => 0, 'revenue' => 0.0, 'fees' => 0.0,
+                'name' => $r->name ?: 'Unknown', 'booked' => 0, 'arrived' => 0, 'converted' => 0,
+                'package_revenue' => 0.0, 'standalone_revenue' => 0.0, 'revenue' => 0.0,
             ];
 
             $rows = [];
@@ -573,15 +571,73 @@ class BrandStatsService
             foreach ($conversions as $r) {
                 $rows[$r->id] ??= $blank($r);
                 $rows[$r->id]['converted'] = (int) $r->converted;
-                $rows[$r->id]['revenue']   = (float) $r->revenue;
             }
-            foreach ($fees as $r) {
+            foreach ($revenue as $r) {
                 $rows[$r->id] ??= $blank($r);
-                $rows[$r->id]['fees'] = (float) $r->revenue;
+                $rows[$r->id]['package_revenue']    = (float) $r->package_revenue;
+                $rows[$r->id]['standalone_revenue'] = (float) $r->standalone_revenue;
+                $rows[$r->id]['revenue']            = (float) $r->package_revenue + (float) $r->standalone_revenue;
             }
 
             return array_values($rows);
         }, []);
+    }
+
+    /**
+     * Revenue per doctor exactly as every CRM's "Doctor Wise Revenue" report
+     * computes it (FinanceReportController::showPatientPackagePayments, which
+     * is identical on all six deployments). Verified per doctor against a
+     * line-by-line replica of that report on all six databases.
+     *
+     *  - Package payments: cash-in advances on a package — positive, not a
+     *    refund, not cancelled — dated in the period, credited to the doctor
+     *    of the package's appointment.
+     *  - Standalone payments: cash-in advances with no package, not a refund
+     *    or cancelled, credited to the doctor of the advance's appointment.
+     *
+     * The report doesn't exclude tax or adjustment rows and doesn't net off
+     * refunds, so neither does this; it is close to, but not the same as, the
+     * Collection card.
+     */
+    protected function doctorRevenue(Connection $db, string $from, string $to, ?int $locationId): array
+    {
+        $start = $from . ' 00:00:00';
+        $end   = $to . ' 23:59:59';
+
+        return $db->select(
+            "SELECT id, name,
+                    SUM(pkg) AS package_revenue,
+                    SUM(sa)  AS standalone_revenue
+               FROM (
+                    SELECT a.doctor_id AS id, u.name AS name, SUM(pa.cash_amount) AS pkg, 0 AS sa
+                      FROM packages p
+                      JOIN package_advances pa ON pa.package_id = p.id
+                      LEFT JOIN appointments a ON a.id = p.appointment_id AND a.deleted_at IS NULL
+                      LEFT JOIN users u        ON u.id = a.doctor_id
+                     WHERE p.deleted_at IS NULL
+                       AND pa.cash_flow = 'in' AND pa.cash_amount > 0
+                       AND pa.is_refund = 0 AND pa.is_cancel = 0 AND pa.deleted_at IS NULL
+                       AND pa.created_at BETWEEN ? AND ?"
+                       . ($locationId ? ' AND p.location_id = ?' : '') . "
+                     GROUP BY a.doctor_id, u.name
+                    UNION ALL
+                    SELECT a.doctor_id AS id, u.name AS name, 0 AS pkg, SUM(pa.cash_amount) AS sa
+                      FROM package_advances pa
+                      JOIN users pt            ON pt.id = pa.patient_id
+                      LEFT JOIN appointments a ON a.id = pa.appointment_id
+                      LEFT JOIN users u        ON u.id = a.doctor_id
+                     WHERE pa.cash_flow = 'in' AND pa.is_refund = 0 AND pa.is_cancel = 0
+                       AND pa.package_id IS NULL AND pa.deleted_at IS NULL
+                       AND pa.created_at BETWEEN ? AND ?"
+                       . ($locationId ? ' AND a.location_id = ?' : '') . "
+                     GROUP BY a.doctor_id, u.name
+               ) t
+              GROUP BY id, name",
+            array_merge(
+                [$start, $end], $locationId ? [$locationId] : [],
+                [$start, $end], $locationId ? [$locationId] : []
+            )
+        );
     }
 
     /**
@@ -590,10 +646,9 @@ class BrandStatsService
      * (Invoices::getDailyEmployeeStats): invoices.doctor_id, summed over
      * invoice_details.tax_including_price, dated by the invoice.
      *
-     * Invoices on consultation appointments belong to the consultant and are
-     * reported there as consultation fees. Between the two sections every
-     * paid invoice is accounted for: none lacks an appointment and no other
-     * appointment type is invoiced.
+     * Invoices on consultation appointments are not counted here: consultants
+     * are measured by the Doctor Wise Revenue report instead, whose
+     * standalone payments include what patients paid for consultations.
      */
     public function treatmentDoctorPerformance(string $key, string $from, string $to, ?int $locationId): array
     {
@@ -641,8 +696,7 @@ class BrandStatsService
     /**
      * Paid invoices on one appointment type, by the doctor on the invoice,
      * summed over invoice_details.tax_including_price — the definition of
-     * Invoices::getDailyEmployeeStats. Treatments feed the Treatment Doctors
-     * section; consultations feed the consultants' fee column.
+     * Invoices::getDailyEmployeeStats.
      */
     protected function invoicedByDoctor(Connection $db, int $type, string $from, string $to, ?int $locationId): array
     {
